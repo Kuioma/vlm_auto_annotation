@@ -1,0 +1,37 @@
+{
+  "coarse:video-1": [
+    {
+      "task_summary": "将杯子放到托盘",
+      "segments": [
+        {
+          "segment_id": "seg-0001",
+          "start_ms": 0,
+          "end_ms": 900,
+          "values": {
+            "atomic_action": "grasp",
+            "interaction_object": "cup",
+            "target": "杯柄"
+          },
+          "sentence": "抓住杯子的把手。",
+          "evidence_timestamps_ms": [500]
+        }
+      ]
+    }
+  ],
+  "boundary-start:video-1:seg-0001": [
+    {
+      "segment_id": "seg-0001",
+      "boundary_kind": "start",
+      "boundary_ms": 100,
+      "evidence_timestamps_ms": [100, 200]
+    }
+  ],
+  "boundary-end:video-1:seg-0001": [
+    {
+      "segment_id": "seg-0001",
+      "boundary_kind": "end",
+      "boundary_ms": 800,
+      "evidence_timestamps_ms": [700, 800]
+    }
+  ]
+}

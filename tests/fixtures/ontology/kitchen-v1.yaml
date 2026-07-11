@@ -1,0 +1,17 @@
+ontology_id: kitchen-v1
+revision: 1
+vocabularies:
+  atomic_actions:
+    - id: grasp
+      name: 抓取
+      definition: 建立并保持对物体的控制
+    - id: place
+      name: 放置
+      definition: 将受控物体释放到目标位置
+  interaction_objects:
+    - id: cup
+      name: 杯子
+      definition: 用于盛放液体的容器
+    - id: tray
+      name: 托盘
+      definition: 用于承载物体的平台
