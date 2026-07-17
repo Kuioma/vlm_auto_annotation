@@ -11,6 +11,7 @@ class GenerationRequest(BaseModel):
     media_start_ms: int = Field(ge=0)
     media_end_ms: int = Field(gt=0)
     sample_timestamps_ms: tuple[int, ...]
+    sampling_fps: float = Field(gt=0, allow_inf_nan=False)
     prompt: str
     response_schema: dict[str, Any]
 

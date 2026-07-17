@@ -1,0 +1,18 @@
+schema_id: pick-and-place-bolt-v1
+segment_values:
+  atomic_action:
+    type: enum
+    source: ontology.atomic_actions
+    required: true
+  interaction_object:
+    type: enum
+    source: ontology.interaction_objects
+    required: true
+  target:
+    type: string
+    required: true
+text_output:
+  field: sentence
+  language: zh-CN
+  style: imperative
+  required: true

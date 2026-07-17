@@ -190,6 +190,43 @@ def test_cli_runs_mock_pipeline_on_real_video(
 
 
 @requires_media_tools
+def test_runner_checkpoints_completed_items_before_later_failure(
+    tmp_path: Path,
+) -> None:
+    video = _make_video(tmp_path)
+    manifest = tmp_path / "input.jsonl"
+    _write_manifest(
+        manifest,
+        [
+            _manifest_record(video, video_id="video-1"),
+            _manifest_record(video, video_id="video-2"),
+        ],
+    )
+    config = _write_config(tmp_path, manifest)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"mock script exhausted for coarse:video-2",
+    ):
+        main(["run", "--config", str(config)])
+
+    output_path = tmp_path / "output.jsonl"
+    completed = [
+        json.loads(line)
+        for line in output_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [document["video_id"] for document in completed] == ["video-1"]
+
+    digest = completed[0]["provenance"]["config_hash"]
+    run_id = f"run-{digest.removeprefix('sha256:')}"
+    run_root = tmp_path / "artifacts" / run_id
+    assert (run_root / "video-1/final.json").is_file()
+    assert (run_root / "video-2/coarse-sample-plan.json").is_file()
+    assert not (run_root / "video-2/final.json").exists()
+
+
+@requires_media_tools
 def test_run_identity_tracks_content_and_every_stage_version(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

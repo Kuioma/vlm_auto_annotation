@@ -5,7 +5,11 @@ from typing import Any
 
 import yaml
 
-from auto_annotation.ontology.models import AnnotationSchema, Ontology
+from auto_annotation.ontology.models import (
+    AnnotationSchema,
+    Ontology,
+    OntologyEntry,
+)
 
 
 class ResolvedContract:
@@ -38,7 +42,7 @@ class ResolvedContract:
             f"sha256:{hashlib.sha256(ontology_canonical).hexdigest()}"
         )
 
-    def _enum_ids(self, source: str) -> list[str]:
+    def _entries(self, source: str) -> list[OntologyEntry]:
         prefix = "ontology."
         if not source.startswith(prefix):
             raise ValueError(f"invalid ontology source: {source}")
@@ -48,7 +52,17 @@ class ResolvedContract:
         entries = self.ontology.vocabularies[vocabulary]
         if not entries:
             raise ValueError(f"empty ontology vocabulary: {vocabulary}")
+        return entries
+
+    def _enum_ids(self, source: str) -> list[str]:
+        entries = self._entries(source)
         return [entry.id for entry in entries]
+
+    def entry_for(self, source: str, entry_id: str) -> OntologyEntry:
+        for entry in self._entries(source):
+            if entry.id == entry_id:
+                return entry
+        raise ValueError(f"unknown ontology id in {source}: {entry_id}")
 
     def validate_values(self, values: dict[str, Any]) -> None:
         unexpected = set(values) - set(self.schema.segment_values)

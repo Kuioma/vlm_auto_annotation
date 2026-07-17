@@ -233,6 +233,26 @@ def test_jsonl_export_is_deterministic(tmp_path: Path) -> None:
     )
 
 
+def test_jsonl_export_can_preserve_caller_order_without_record_key(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "output.jsonl"
+
+    write_jsonl(
+        output,
+        [
+            {"result": "first"},
+            {"result": "second"},
+        ],
+        sort_key=None,
+    )
+
+    assert output.read_text(encoding="utf-8") == (
+        '{"result":"first"}\n'
+        '{"result":"second"}\n'
+    )
+
+
 def test_jsonl_export_jsonizes_nested_pydantic_records(tmp_path: Path) -> None:
     output = tmp_path / "output.jsonl"
     records = (

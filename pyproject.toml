@@ -10,6 +10,7 @@ dependencies = [
   "pydantic>=2.13,<3",
   "PyYAML>=6,<7",
   "jsonschema>=4.23,<5",
+  "httpx>=0.28,<0.29",
 ]
 
 [project.optional-dependencies]
@@ -17,6 +18,7 @@ test = ["pytest>=8,<9"]
 
 [project.scripts]
 auto-annotate = "auto_annotation.cli:main"
+auto-annotate-ordered = "auto_annotation.ordered_processor:run"
 
 [tool.setuptools.packages.find]
 where = ["src"]

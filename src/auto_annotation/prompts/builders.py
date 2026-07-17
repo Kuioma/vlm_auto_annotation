@@ -62,6 +62,7 @@ def build_coarse_request(
         sample_timestamps_ms=tuple(
             point.source_timestamp_ms for point in plan.points
         ),
+        sampling_fps=plan.target_fps,
         prompt=prompt,
         response_schema=response_schema,
     )
@@ -141,6 +142,7 @@ def build_boundary_request(
         sample_timestamps_ms=tuple(
             point.source_timestamp_ms for point in plan.points
         ),
+        sampling_fps=plan.target_fps,
         prompt=prompt,
         response_schema=schema,
     )

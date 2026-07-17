@@ -16,6 +16,7 @@ def _request(**overrides: object) -> GenerationRequest:
         "media_start_ms": 0,
         "media_end_ms": 10_000,
         "sample_timestamps_ms": (0, 500, 1000),
+        "sampling_fps": 2.0,
         "prompt": "annotate",
         "response_schema": {
             "type": "object",
@@ -85,3 +86,11 @@ def test_generation_request_accepts_samples_at_start_and_before_end() -> None:
     )
 
     assert request.sample_timestamps_ms == (1000, 1999)
+
+
+@pytest.mark.parametrize("sampling_fps", [0, float("inf"), float("nan")])
+def test_generation_request_rejects_invalid_sampling_fps(
+    sampling_fps: float,
+) -> None:
+    with pytest.raises(PydanticValidationError):
+        _request(sampling_fps=sampling_fps)

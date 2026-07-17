@@ -1,0 +1,110 @@
+# Formal dataset batch entry for the current two-stage multiview frame-index
+# annotator.  Change source/processor plugin configuration to swap either side;
+# the batch runner itself stays unchanged.
+version: 1
+
+source:
+  plugin: auto_annotation.batch.sources.wa2:PLUGIN
+  config:
+    dataset_root: /home/cz-sjj/ws/dataset/WA2_industrial_sorting_3cam_gripper_cam/0622_333_20260624_093035_converted_online_clean_20260624_194551
+    dataset_id: 0622_333_20260624_093035_converted_online_clean_20260624_194551
+    episodes_path: meta/episodes.jsonl
+    media:
+      HEAD_RGB: observation.images.head_rgb
+      RIGHT_WRIST_RGB: observation.images.right_wrist_rgb
+    primary_media: HEAD_RGB
+    # Use content fingerprints so resume cannot silently accept a video whose
+    # bytes changed while its path stayed the same. "stat" is a faster option.
+    fingerprint_mode: sha256
+
+processor:
+  plugin: auto_annotation.batch.processors.command:PLUGIN
+  config:
+    semantic_version: ordered-closed-set-multiview-two-stage-v1
+    cwd: ../..
+    argv:
+      - uv
+      - run
+      - auto-annotate-ordered
+      - --video
+      - "{media_HEAD_RGB}"
+      - --right-wrist-video
+      - "{media_RIGHT_WRIST_RGB}"
+      - --output-dir
+      - "{output_dir}"
+      - --schema-path
+      - examples/vllm_smoke/schema.yaml
+      - --ontology-path
+      - examples/vllm_smoke/ontology.yaml
+      - --task-path
+      - examples/vllm_smoke/task.yaml
+      - --fps
+      - "2"
+      - --refine-fps
+      - "10"
+      - --refine-window-ms
+      - "2000"
+      - --columns
+      - "3"
+      - --base-url
+      - http://127.0.0.1:8000/v1
+      - --model-id
+      - Qwen/Qwen3.6-27B
+      - --model-revision
+      - 6a9e13bd6fc8f0983b9b99948120bc37f49c13e9
+      - --vllm-version
+      - 0.24.0
+      - --timeout-s
+      - "600"
+      - --media-staging-root
+      - /home/cz-sjj/ws/vllm/media
+    timeout_s: 2400
+    retryable_exit_codes: [1]
+    result_format: single_jsonl
+    result_path: output.jsonl
+    # These hashes form the processor identity. A behavior/contract change gets
+    # a new run directory instead of silently reusing labels from older code.
+    identity_files:
+      - schema.yaml
+      - ontology.yaml
+      - task.yaml
+      - ../../pyproject.toml
+      - ../../uv.lock
+      - ../../src/auto_annotation/batch/processors/command.py
+      - ../../src/auto_annotation/config/models.py
+      - ../../src/auto_annotation/domain/models.py
+      - ../../src/auto_annotation/exporters/jsonl.py
+      - ../../src/auto_annotation/inference/base.py
+      - ../../src/auto_annotation/inference/vllm.py
+      - ../../src/auto_annotation/media/materialize.py
+      - ../../src/auto_annotation/media/probe.py
+      - ../../src/auto_annotation/media/sampling.py
+      - ../../src/auto_annotation/ontology/models.py
+      - ../../src/auto_annotation/ontology/registry.py
+      - ../../src/auto_annotation/ordered_steps.py
+      - ../../src/auto_annotation/ordered_processor.py
+      - ../../src/auto_annotation/pipeline/frame_index.py
+      - ../../src/auto_annotation/prompts/frame_index.py
+      - ../../src/auto_annotation/task.py
+      # The current processor records full-file metadata hashes in provenance,
+      # so these shared files intentionally invalidate the whole run.
+      - /home/cz-sjj/ws/dataset/WA2_industrial_sorting_3cam_gripper_cam/0622_333_20260624_093035_converted_online_clean_20260624_194551/meta/episodes.jsonl
+      - /home/cz-sjj/ws/dataset/WA2_industrial_sorting_3cam_gripper_cam/0622_333_20260624_093035_converted_online_clean_20260624_194551/meta/modality.json
+      - /home/cz-sjj/ws/dataset/WA2_industrial_sorting_3cam_gripper_cam/0622_333_20260624_093035_converted_online_clean_20260624_194551/meta/training_mask.json
+
+execution:
+  resume: true
+  retry_terminal_failures: false
+  max_attempts: 3
+  retry_backoff_s: 10
+  continue_on_error: true
+  # Bound the number of independent episodes in flight. Start conservatively
+  # for a 27B multimodal model and tune against observed GPU memory and latency.
+  concurrency: 15
+  start_index: 0
+  # For a pilot run, set limit: 1. start_index/end_index use a half-open slice.
+  # end_index: 10
+  # limit: 1
+
+output:
+  workspace: /home/cz-sjj/ws/dataset/WA2_industrial_sorting_3cam_gripper_cam/0622_333_20260624_093035_converted_online_clean_20260624_194551/meta/auto_annotation_frame_index_batch

@@ -316,6 +316,90 @@ def test_finalize_rejects_different_label_overlap(
         )
 
 
+def test_finalize_resolves_bounded_overlap_with_shared_evidence(
+    contract: ResolvedContract,
+) -> None:
+    coarse = CoarseAnnotation(
+        task_summary="移动杯子",
+        segments=[
+            make_segment("s1", 1000, 4000, "grasp"),
+            make_segment("s2", 4000, 7000, "place"),
+        ],
+    )
+    refined = [
+        make_segment(
+            "s1",
+            1000,
+            5000,
+            "grasp",
+            evidence_timestamps_ms=[3500, 4000, 4500],
+        ),
+        make_segment(
+            "s2",
+            3000,
+            7000,
+            "place",
+            evidence_timestamps_ms=[3500, 4000, 4500],
+        ),
+    ]
+
+    document = finalize_annotation(
+        video_id="video-1",
+        duration_ms=10_000,
+        coarse=coarse,
+        refined=refined,
+        contract=contract,
+        timeline=TimelineConfig(max_overlap_resolution_ms=2000),
+    )
+
+    assert document.segments[0].end_ms == 4000
+    assert document.segments[1].start_ms == 4000
+    assert document.quality.review_reasons == ["boundary_overlap_resolved"]
+    assert document.quality.signals["overlap_resolutions"] == [
+        {
+            "left_segment_id": "s1",
+            "right_segment_id": "s2",
+            "original_left_end_ms": 5000,
+            "original_right_start_ms": 3000,
+            "overlap_ms": 2000,
+            "resolved_boundary_ms": 4000,
+            "strategy": "shared_evidence_nearest_midpoint",
+        }
+    ]
+    assert document.quality.score == pytest.approx(0.8)
+
+
+def test_finalize_rejects_overlap_without_shared_evidence(
+    contract: ResolvedContract,
+) -> None:
+    refined = [
+        make_segment(
+            "s1",
+            1000,
+            4000,
+            "grasp",
+            evidence_timestamps_ms=[2000],
+        ),
+        make_segment(
+            "s2",
+            3000,
+            5000,
+            "place",
+            evidence_timestamps_ms=[4500],
+        ),
+    ]
+
+    with pytest.raises(TimelineConflict, match="no shared boundary evidence"):
+        finalize_annotation(
+            video_id="video-1",
+            duration_ms=10_000,
+            coarse=CoarseAnnotation(task_summary="移动杯子", segments=refined),
+            refined=refined,
+            contract=contract,
+            timeline=TimelineConfig(max_overlap_resolution_ms=1000),
+        )
+
+
 def test_finalize_validates_values_against_contract(
     contract: ResolvedContract,
 ) -> None:

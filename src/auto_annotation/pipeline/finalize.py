@@ -107,6 +107,72 @@ def _merge_same_label(
     return merged, merged_segment_sources
 
 
+def _resolve_different_label_overlaps(
+    segments: list[Segment],
+    max_overlap_ms: int,
+) -> tuple[list[Segment], list[dict[str, object]]]:
+    resolved: list[Segment] = []
+    resolutions: list[dict[str, object]] = []
+    for segment in sorted(
+        segments,
+        key=lambda item: (item.start_ms, item.end_ms, item.segment_id),
+    ):
+        if not resolved:
+            resolved.append(segment)
+            continue
+
+        previous = resolved[-1]
+        overlap_ms = previous.end_ms - segment.start_ms
+        if overlap_ms <= 0 or _same_values(previous, segment):
+            resolved.append(segment)
+            continue
+        if max_overlap_ms <= 0 or overlap_ms > max_overlap_ms:
+            raise TimelineConflict(
+                f"different-label overlap: {previous.segment_id}, "
+                f"{segment.segment_id}"
+            )
+
+        overlap_start = segment.start_ms
+        overlap_end = previous.end_ms
+        midpoint = (overlap_start + overlap_end) // 2
+        common_evidence = sorted(
+            timestamp
+            for timestamp in set(previous.evidence_timestamps_ms).intersection(
+                segment.evidence_timestamps_ms
+            )
+            if overlap_start <= timestamp <= overlap_end
+        )
+        if not common_evidence:
+            raise TimelineConflict(
+                "different-label overlap has no shared boundary evidence: "
+                f"{previous.segment_id}, {segment.segment_id}"
+            )
+        boundary_ms = min(
+            common_evidence,
+            key=lambda timestamp: (abs(timestamp - midpoint), timestamp),
+        )
+        if boundary_ms <= previous.start_ms or boundary_ms >= segment.end_ms:
+            raise TimelineConflict(
+                "different-label overlap resolution would create an invalid "
+                f"segment: {previous.segment_id}, {segment.segment_id}"
+            )
+
+        resolved[-1] = previous.model_copy(update={"end_ms": boundary_ms})
+        resolved.append(segment.model_copy(update={"start_ms": boundary_ms}))
+        resolutions.append(
+            {
+                "left_segment_id": previous.segment_id,
+                "right_segment_id": segment.segment_id,
+                "original_left_end_ms": previous.end_ms,
+                "original_right_start_ms": segment.start_ms,
+                "overlap_ms": overlap_ms,
+                "resolved_boundary_ms": boundary_ms,
+                "strategy": "shared_evidence_nearest_midpoint",
+            }
+        )
+    return resolved, resolutions
+
+
 def finalize_annotation(
     video_id: str,
     duration_ms: int,
@@ -129,8 +195,12 @@ def finalize_annotation(
         )
         for segment in refined
     ]
-    segments, merged_segment_sources = _merge_same_label(
+    resolved_refined, overlap_resolutions = _resolve_different_label_overlaps(
         refined,
+        timeline.max_overlap_resolution_ms,
+    )
+    segments, merged_segment_sources = _merge_same_label(
+        resolved_refined,
         timeline.merge_gap_ms,
     )
 
@@ -142,6 +212,8 @@ def finalize_annotation(
         for segment in segments
     ):
         review_reasons.append("segment_shorter_than_minimum")
+    if overlap_resolutions:
+        review_reasons.append("boundary_overlap_resolved")
 
     signals = {
         "max_boundary_shift_ms": max(boundary_shifts, default=0),
@@ -149,6 +221,8 @@ def finalize_annotation(
         "empty_timeline": not segments,
         "merged_segment_sources": merged_segment_sources,
     }
+    if overlap_resolutions:
+        signals["overlap_resolutions"] = overlap_resolutions
     score = max(0.0, 1.0 - 0.2 * len(review_reasons))
     return FinalizedAnnotation(
         video_id=video_id,

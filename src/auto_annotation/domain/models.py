@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -16,6 +16,28 @@ class ManifestItem(DomainModel):
     ontology_id: str = Field(min_length=1)
     context: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TaskStep(DomainModel):
+    step_id: str = Field(min_length=1)
+    values: dict[str, Any]
+    sentence: str = Field(min_length=1)
+
+
+class OrderedTask(DomainModel):
+    version: Literal[1]
+    task_id: str = Field(min_length=1)
+    schema_id: str = Field(min_length=1)
+    ontology_id: str = Field(min_length=1)
+    task_summary: str = Field(min_length=1)
+    steps: tuple[TaskStep, ...] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def validate_unique_step_ids(self) -> "OrderedTask":
+        step_ids = [step.step_id for step in self.steps]
+        if len(set(step_ids)) != len(step_ids):
+            raise ValueError("ordered task step IDs must be unique")
+        return self
 
 
 class VideoInfo(DomainModel):
@@ -63,6 +85,20 @@ class Segment(DomainModel):
         if self.end_ms <= self.start_ms:
             raise ValueError("end_ms must be greater than start_ms")
         return self
+
+
+class Event(DomainModel):
+    event_id: str = Field(min_length=1)
+    timestamp_ms: int = Field(ge=0)
+    values: dict[str, Any]
+    sentence: str = Field(min_length=1)
+    evidence_timestamps_ms: list[int] = Field(default_factory=list)
+
+
+class TemporalAnnotation(DomainModel):
+    task_summary: str = Field(min_length=1)
+    events: list[Event]
+    segments: list[Segment]
 
 
 class CoarseAnnotation(DomainModel):

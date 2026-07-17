@@ -1,0 +1,24 @@
+version: 1
+task_id: industrial-sorting-pick-transfer-place-v1
+schema_id: industrial-sorting-smoke-v1
+ontology_id: industrial-sorting-smoke-v1
+task_summary: 将橡胶件从蓝色料箱转移至目标容器
+steps:
+  - step_id: pick_up
+    values:
+      atomic_action: pick_up
+      interaction_object: workpiece
+      target: destination_container
+    sentence: 抓取阶段：从时间轴开始到夹爪首次对工件建立稳定控制的持续阶段。
+  - step_id: transfer
+    values:
+      atomic_action: transfer
+      interaction_object: workpiece
+      target: destination_container
+    sentence: 搬运：保持对工件的稳定控制并将其移向目标位置的持续过程。
+  - step_id: place
+    values:
+      atomic_action: place
+      interaction_object: workpiece
+      target: destination_container
+    sentence: 放置阶段：从工件进入目标落放区域、搬运转为最终对位和释放，到时间轴结束的持续阶段。

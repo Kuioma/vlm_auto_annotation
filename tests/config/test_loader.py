@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from auto_annotation.config.loader import config_hash, load_run_config
-from auto_annotation.config.models import RunConfig
+from auto_annotation.config.models import RunConfig, VllmBackendConfig
 
 
 def test_load_run_config_resolves_paths_and_has_stable_hash(tmp_path: Path) -> None:
@@ -85,3 +85,79 @@ sampling:
 
     with pytest.raises(ValueError, match="greater than 0"):
         load_run_config(config_path)
+
+
+def test_load_vllm_config_resolves_staging_root_and_round_trips(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "run.yaml"
+    config_path.write_text(
+        """
+schema_path: schema.yaml
+ontology_path: ontology.yaml
+manifest_path: inputs.jsonl
+artifact_root: artifacts
+output_path: output.jsonl
+backend:
+  kind: vllm
+  base_url: http://127.0.0.1:8000/v1
+  model_id: Qwen/Qwen3.6-27B
+  model_revision: 6a9e13bd
+  vllm_version: 0.24.0
+  timeout_s: 180
+  max_completion_tokens: 4096
+  boundary_max_completion_tokens: 512
+  temperature: 0
+  seed: 0
+  enable_thinking: false
+  media_staging_root: staging
+  api_key_env: VLLM_API_KEY
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_run_config(config_path)
+
+    assert isinstance(config.backend, VllmBackendConfig)
+    assert config.backend.media_staging_root == tmp_path / "staging"
+    assert str(config.backend.base_url) == "http://127.0.0.1:8000/v1"
+    assert config.backend.api_key_env == "VLLM_API_KEY"
+    round_tripped = RunConfig.model_validate(config.model_dump())
+    assert round_tripped.model_dump() == config.model_dump()
+    assert round_tripped.source_path is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("timeout_s", 0),
+        ("max_completion_tokens", 0),
+        ("boundary_max_completion_tokens", 0),
+        ("temperature", -0.1),
+        ("api_key_env", "not-valid-name"),
+    ],
+)
+def test_invalid_vllm_config_is_rejected(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    values = {
+        "schema_path": "schema.yaml",
+        "ontology_path": "ontology.yaml",
+        "manifest_path": "inputs.jsonl",
+        "artifact_root": "artifacts",
+        "output_path": "output.jsonl",
+        "backend": {
+            "kind": "vllm",
+            "base_url": "http://127.0.0.1:8000/v1",
+            "model_id": "Qwen/Qwen3.6-27B",
+            "model_revision": "revision",
+            "vllm_version": "0.24.0",
+            "media_staging_root": str(tmp_path / "staging"),
+            field: value,
+        },
+    }
+
+    with pytest.raises(ValueError):
+        RunConfig.model_validate(values)

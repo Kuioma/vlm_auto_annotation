@@ -5,7 +5,11 @@ from pathlib import Path
 
 import yaml
 
-from auto_annotation.config.models import RunConfig
+from auto_annotation.config.models import (
+    MockBackendConfig,
+    RunConfig,
+    VllmBackendConfig,
+)
 
 
 def _resolve(base: Path, value: Path) -> Path:
@@ -16,6 +20,22 @@ def load_run_config(path: Path) -> RunConfig:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     config = RunConfig.model_validate(raw)
     base = path.resolve().parent
+    backend = config.backend
+    if isinstance(backend, MockBackendConfig):
+        resolved_backend = backend.model_copy(
+            update={"fixture_path": _resolve(base, backend.fixture_path)}
+        )
+    elif isinstance(backend, VllmBackendConfig):
+        resolved_backend = backend.model_copy(
+            update={
+                "media_staging_root": _resolve(
+                    base, backend.media_staging_root
+                )
+            }
+        )
+    else:
+        raise TypeError(f"unsupported backend config: {type(backend)!r}")
+
     resolved = config.model_copy(
         update={
             "schema_path": _resolve(base, config.schema_path),
@@ -23,9 +43,7 @@ def load_run_config(path: Path) -> RunConfig:
             "manifest_path": _resolve(base, config.manifest_path),
             "artifact_root": _resolve(base, config.artifact_root),
             "output_path": _resolve(base, config.output_path),
-            "backend": config.backend.model_copy(
-                update={"fixture_path": _resolve(base, config.backend.fixture_path)}
-            ),
+            "backend": resolved_backend,
         }
     )
     resolved._source_path = path.resolve()

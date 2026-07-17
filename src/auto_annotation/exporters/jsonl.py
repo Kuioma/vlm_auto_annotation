@@ -7,9 +7,15 @@ from typing import Any, Iterable
 from pydantic_core import to_jsonable_python
 
 
-def write_jsonl(path: Path, records: Iterable[Any]) -> None:
+def write_jsonl(
+    path: Path,
+    records: Iterable[Any],
+    *,
+    sort_key: str | None = "video_id",
+) -> None:
     normalized = [to_jsonable_python(record) for record in records]
-    normalized.sort(key=lambda record: record["video_id"])
+    if sort_key is not None:
+        normalized.sort(key=lambda record: record[sort_key])
     path.parent.mkdir(parents=True, exist_ok=True)
 
     temporary: Path | None = None

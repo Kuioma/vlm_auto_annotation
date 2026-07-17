@@ -1,0 +1,56 @@
+ontology_id: industrial-sorting-smoke-v1
+revision: smoke-4
+vocabularies:
+  atomic_actions:
+    - id: pick_up
+      name: 抓取阶段
+      definition: >-
+        从时间轴开始到夹爪首次对工件建立稳定控制的持续阶段。
+      temporal_type: interval_action
+      boundary_rule: >-
+        选择能够回溯确认稳定抓持已经成立的最早采样帧。
+        该边界结束 [timeline_start, pick_up) 抓取阶段，并开始搬运阶段。
+        可以使用后续帧验证抓持是否稳定，但不得将事件时间推迟到工件被抬起或离开容器。
+      positive_cues:
+        - 夹爪已形成有效夹持
+        - 后续画面可验证工件与夹爪保持同步运动
+      negative_cues:
+        - 夹爪仅接触工件
+        - 夹爪正在闭合但尚未稳定控制工件
+        - 工件已经被抬起或离开容器
+        - 工件仅仅离开主相机画面
+    - id: transfer
+      name: 搬运
+      definition: 保持对工件的稳定控制并将其移向目标位置的持续过程
+      temporal_type: interval_action
+      boundary_rule: >-
+        开始边界选择稳定抓持已经成立、搬运开始的最早采样帧；
+        结束边界选择工件进入目标落放区域、搬运转为最终放置的最早采样帧。
+        搬运使用半开区间，两个边界分别属于搬运段和后续放置段的起点。
+      positive_cues:
+        - 工件在夹持中随夹爪运动
+        - 夹爪与工件之间的控制关系持续保持
+      negative_cues:
+        - 稳定抓持尚未成立时的接近或闭合夹爪
+        - 工件已经释放后的撤离动作
+        - 仅凭工件离开主相机画面推断搬运结束
+    - id: place
+      name: 放置阶段
+      definition: >-
+        从工件进入目标落放区域、搬运转为最终对位和释放，到时间轴结束的持续阶段。
+      temporal_type: interval_action
+      boundary_rule: >-
+        选择能够确认工件已经到达目标落放区域，并开始最终对位、下放或释放过程的最早采样帧。
+        该边界结束 [pick_up, place) 搬运阶段，并开始 [place, timeline_end) 放置阶段。
+        可以使用后续帧验证放置是否完成，但不得将边界推迟到释放完成或机械手撤离。
+      positive_cues:
+        - 工件已经进入目标容器或工作区域
+        - 运动从跨区域搬运转为最终对位、下放或释放
+      negative_cues:
+        - 工件仍在向目标区域进行跨区域搬运
+        - 仅凭工件离开主相机画面推断放置开始
+        - 等到工件已经释放或机械手撤离后才选择边界
+  interaction_objects:
+    - id: workpiece
+      name: 工件
+      definition: 被机器人抓持、移动并释放到目标位置的待分拣物体

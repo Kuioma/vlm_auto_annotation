@@ -5,15 +5,25 @@ from pathlib import Path
 
 from auto_annotation.artifacts.store import ArtifactStore
 from auto_annotation.config.loader import config_hash
-from auto_annotation.config.models import RunConfig
+from auto_annotation.config.models import (
+    MockBackendConfig,
+    RunConfig,
+    VllmBackendConfig,
+)
 from auto_annotation.domain.models import (
     AnnotationDocument,
     ManifestItem,
     Provenance,
 )
 from auto_annotation.exporters.jsonl import write_jsonl
+from auto_annotation.inference.base import InferenceBackend
 from auto_annotation.inference.mock import ScriptedMockBackend
+from auto_annotation.inference.vllm import VLLM_ADAPTER_VERSION, VllmBackend
 from auto_annotation.manifest import read_manifest
+from auto_annotation.media.materialize import (
+    MEDIA_MATERIALIZER_VERSION,
+    LocalVideoMaterializer,
+)
 from auto_annotation.media.probe import probe_video
 from auto_annotation.media.sampling import build_chunks, build_sample_plan
 from auto_annotation.ontology.registry import ResolvedContract, load_contract
@@ -28,8 +38,8 @@ from auto_annotation.prompts.builders import (
 
 COARSE_STAGE_VERSION = "coarse-stage-v1"
 REFINE_STAGE_VERSION = "refine-stage-v1"
-FINALIZE_STAGE_VERSION = "finalize-stage-v1"
-RUNNER_STAGE_VERSION = "runner-stage-v1"
+FINALIZE_STAGE_VERSION = "finalize-stage-v2"
+RUNNER_STAGE_VERSION = "runner-stage-v2"
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -102,7 +112,7 @@ async def _run_items(
     config: RunConfig,
     items: list[ManifestItem],
     contract: ResolvedContract,
-    backend: ScriptedMockBackend,
+    backend: InferenceBackend,
     store: ArtifactStore,
     run_id: str,
     digest: str,
@@ -164,7 +174,52 @@ async def _run_items(
         )
         store.write_json(run_id, item.video_id, "final", document)
         results.append(document)
+        write_jsonl(config.output_path, results)
     return results
+
+
+async def _execute_run(
+    config: RunConfig,
+    items: list[ManifestItem],
+    contract: ResolvedContract,
+    run_id: str,
+    digest: str,
+    mock_script: dict[str, list[dict[str, object]]] | None,
+) -> list[AnnotationDocument]:
+    backend_config = config.backend
+    if isinstance(backend_config, MockBackendConfig):
+        if mock_script is None:
+            raise TypeError("mock backend requires a script")
+        backend = ScriptedMockBackend(mock_script)
+        return await _run_items(
+            config,
+            items,
+            contract,
+            backend,
+            ArtifactStore(config.artifact_root),
+            run_id,
+            digest,
+        )
+    if isinstance(backend_config, VllmBackendConfig):
+        materializer = LocalVideoMaterializer(
+            backend_config.media_staging_root
+        )
+        materializer.validate()
+        async with VllmBackend(
+            backend_config,
+            materializer=materializer,
+        ) as backend:
+            await backend.healthcheck()
+            return await _run_items(
+                config,
+                items,
+                contract,
+                backend,
+                ArtifactStore(config.artifact_root),
+                run_id,
+                digest,
+            )
+    raise TypeError(f"unsupported backend config: {type(backend_config)!r}")
 
 
 def run_annotation(config: RunConfig) -> list[AnnotationDocument]:
@@ -173,6 +228,9 @@ def run_annotation(config: RunConfig) -> list[AnnotationDocument]:
         if config.source_path is None
         else [("config source", config.source_path)]
     )
+    backend_inputs: list[tuple[str, Path]] = []
+    if isinstance(config.backend, MockBackendConfig):
+        backend_inputs.append(("mock fixture_path", config.backend.fixture_path))
     _validate_output_path(
         config.output_path,
         config_inputs
@@ -180,8 +238,8 @@ def run_annotation(config: RunConfig) -> list[AnnotationDocument]:
             ("manifest_path", config.manifest_path),
             ("schema_path", config.schema_path),
             ("ontology_path", config.ontology_path),
-            ("mock fixture_path", config.backend.fixture_path),
-        ],
+        ]
+        + backend_inputs,
     )
     contract = load_contract(config.schema_path, config.ontology_path)
     manifest_bytes = config.manifest_path.read_bytes()
@@ -195,24 +253,38 @@ def run_annotation(config: RunConfig) -> list[AnnotationDocument]:
         ],
     )
 
-    fixture_bytes = config.backend.fixture_path.read_bytes()
-    script = json.loads(fixture_bytes)
-    backend = ScriptedMockBackend(script)
-    store = ArtifactStore(config.artifact_root)
+    mock_script: dict[str, list[dict[str, object]]] | None = None
+    backend_identity: dict[str, str]
+    if isinstance(config.backend, MockBackendConfig):
+        fixture_bytes = config.backend.fixture_path.read_bytes()
+        mock_script = json.loads(fixture_bytes)
+        backend_identity = {
+            "mock_fixture_sha256": _sha256_bytes(fixture_bytes),
+            "model_id": ScriptedMockBackend.model_id,
+            "model_revision": ScriptedMockBackend.model_revision,
+        }
+    elif isinstance(config.backend, VllmBackendConfig):
+        backend_identity = {
+            "media_materializer_version": MEDIA_MATERIALIZER_VERSION,
+            "model_id": config.backend.model_id,
+            "model_revision": config.backend.model_revision,
+            "vllm_adapter_version": VLLM_ADAPTER_VERSION,
+            "vllm_version": config.backend.vllm_version,
+        }
+    else:
+        raise TypeError(f"unsupported backend config: {type(config.backend)!r}")
     identity = {
         "schema_hash": contract.schema_hash,
         "ontology_hash": contract.ontology_hash,
         "manifest_sha256": _sha256_bytes(manifest_bytes),
-        "mock_fixture_sha256": _sha256_bytes(fixture_bytes),
         "coarse_prompt_version": COARSE_PROMPT_VERSION,
         "boundary_prompt_version": BOUNDARY_PROMPT_VERSION,
         "coarse_stage_version": COARSE_STAGE_VERSION,
         "refine_stage_version": REFINE_STAGE_VERSION,
         "finalize_stage_version": FINALIZE_STAGE_VERSION,
         "runner_stage_version": RUNNER_STAGE_VERSION,
-        "model_id": backend.model_id,
-        "model_revision": backend.model_revision,
     }
+    identity.update(backend_identity)
     identity.update(
         {
             f"video_sha256:{item.video_id}": _sha256_file(item.video_uri)
@@ -225,15 +297,13 @@ def run_annotation(config: RunConfig) -> list[AnnotationDocument]:
     )
     run_id = f"run-{digest.removeprefix('sha256:')}"
     results = asyncio.run(
-        _run_items(
+        _execute_run(
             config,
             items,
             contract,
-            backend,
-            store,
             run_id,
             digest,
+            mock_script,
         )
     )
-    write_jsonl(config.output_path, results)
     return results
