@@ -1,9 +1,14 @@
+import json
 from pathlib import Path
 
 import pytest
 
 from auto_annotation.config.loader import config_hash, load_run_config
-from auto_annotation.config.models import RunConfig, VllmBackendConfig
+from auto_annotation.config.models import (
+    OpenAICompatibleBackendConfig,
+    RunConfig,
+    VllmBackendConfig,
+)
 
 
 def test_load_run_config_resolves_paths_and_has_stable_hash(tmp_path: Path) -> None:
@@ -159,5 +164,136 @@ def test_invalid_vllm_config_is_rejected(
         },
     }
 
+    with pytest.raises(ValueError):
+        RunConfig.model_validate(values)
+
+
+def test_load_dashscope_example_resolves_staging_and_revision_fallback() -> None:
+    example = (
+        Path(__file__).parents[2]
+        / "examples"
+        / "dashscope_openai_compatible"
+        / "run.yaml"
+    )
+    config = load_run_config(example)
+    assert isinstance(config.backend, OpenAICompatibleBackendConfig)
+    assert config.backend.media_staging_root == example.parent / "staging"
+    assert config.backend.effective_model_revision == config.backend.model_id
+    assert config.backend.base_url is None
+    assert config.backend.base_url_env == "DASHSCOPE_BASE_URL"
+
+
+def test_dashscope_base_url_env_resolves_without_entering_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "DASHSCOPE_BASE_URL",
+        "https://workspace-env.example.test/compatible-mode/v1",
+    )
+    config = OpenAICompatibleBackendConfig(
+        kind="openai_compatible",
+        base_url_env="DASHSCOPE_BASE_URL",
+        model_id="qwen3-vl-plus",
+        media_staging_root=tmp_path,
+        api_key_env="DASHSCOPE_API_KEY",
+    )
+
+    assert str(config.effective_base_url) == (
+        "https://workspace-env.example.test/compatible-mode/v1"
+    )
+    dumped = config.model_dump(mode="json")
+    assert dumped["base_url"] is None
+    assert dumped["base_url_env"] == "DASHSCOPE_BASE_URL"
+    assert "workspace-env" not in json.dumps(dumped)
+
+
+@pytest.mark.parametrize(
+    "backend_update",
+    [
+        {},
+        {
+            "base_url": "https://workspace-id.example.test/v1",
+            "base_url_env": "DASHSCOPE_BASE_URL",
+        },
+    ],
+)
+def test_dashscope_requires_exactly_one_base_url_source(
+    tmp_path: Path,
+    backend_update: dict[str, str],
+) -> None:
+    backend = {
+        "kind": "openai_compatible",
+        "model_id": "qwen3-vl-plus",
+        "media_staging_root": str(tmp_path / "staging"),
+        "api_key_env": "DASHSCOPE_API_KEY",
+        **backend_update,
+    }
+    with pytest.raises(ValueError, match="exactly one"):
+        OpenAICompatibleBackendConfig.model_validate(backend)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        (None, "missing base URL environment variable"),
+        ("", "missing base URL environment variable"),
+        ("not a URL", "invalid base URL environment variable"),
+    ],
+)
+def test_dashscope_rejects_missing_or_invalid_base_url_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: str | None,
+    message: str,
+) -> None:
+    if value is None:
+        monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("DASHSCOPE_BASE_URL", value)
+    config = OpenAICompatibleBackendConfig(
+        kind="openai_compatible",
+        base_url_env="DASHSCOPE_BASE_URL",
+        model_id="qwen3-vl-plus",
+        media_staging_root=tmp_path,
+        api_key_env="DASHSCOPE_API_KEY",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        _ = config.effective_base_url
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("timeout_s", 0),
+        ("temperature", 2),
+        ("api_key_env", "bad-name"),
+        ("base_url_env", "bad-name"),
+    ],
+)
+def test_invalid_dashscope_config_is_rejected(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    backend = {
+        "kind": "openai_compatible",
+        "base_url": "https://workspace-id.example.test/v1",
+        "model_id": "qwen3-vl-plus",
+        "media_staging_root": "staging",
+        "api_key_env": "DASHSCOPE_API_KEY",
+        field: value,
+    }
+    if field == "base_url_env":
+        backend.pop("base_url")
+    values = {
+        "schema_path": "schema.yaml",
+        "ontology_path": "ontology.yaml",
+        "manifest_path": "inputs.jsonl",
+        "artifact_root": "artifacts",
+        "output_path": "output.jsonl",
+        "backend": backend,
+    }
     with pytest.raises(ValueError):
         RunConfig.model_validate(values)

@@ -10,12 +10,21 @@ from math import isfinite
 from pathlib import Path
 from typing import Any
 
-from auto_annotation.config.models import VllmBackendConfig
+from auto_annotation.config.models import (
+    OpenAICompatibleBackendConfig,
+    VllmBackendConfig,
+)
 from auto_annotation.domain.models import ManifestItem, VideoInfo
 from auto_annotation.exporters.jsonl import write_jsonl
 from auto_annotation.inference.base import GenerationRequest
 from auto_annotation.inference.vllm import VLLM_ADAPTER_VERSION, VllmBackend
+from auto_annotation.inference.openai_compatible import (
+    OPENAI_COMPATIBLE_ADAPTER_VERSION,
+    OpenAICompatibleBackend,
+)
+from auto_annotation.prompts.dashscope import DASHSCOPE_PROMPT_VERSION
 from auto_annotation.media.materialize import (
+    MAX_CONTACT_SHEET_POINTS,
     MULTI_VIEW_FRAME_SHEET_MATERIALIZER_VERSION,
     FrameSheetView,
     LocalMultiViewFrameSheetMaterializer,
@@ -50,7 +59,10 @@ AUXILIARY_VIEW_WIDTH = 240
 AUXILIARY_VIEW_HEIGHT = 135
 WA2_VIEW_SELECTION_VERSION = "wa2-active-action-view-selection-v2"
 TRAINING_MASK_VERSION = 1
-MAX_FRAME_SHEET_POINTS = 40
+MAX_FRAME_SHEET_POINTS = MAX_CONTACT_SHEET_POINTS
+ORDERED_PROCESSOR_VERSION = "ordered-processor-v4"
+ORDERED_RUNNER_VERSION = "ordered-runner-v2"
+DEFAULT_VLLM_BASE_URL = "http://127.0.0.1:8000/v1"
 
 
 @dataclass(frozen=True)
@@ -547,11 +559,24 @@ def parse_args() -> argparse.Namespace:
         help="local refinement window centered on each coarse boundary",
     )
     parser.add_argument("--columns", type=int, default=3)
-    parser.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
+    parser.add_argument(
+        "--base-url",
+        help=(
+            "literal model-service URL; defaults to the local vLLM endpoint "
+            "for the vllm backend"
+        ),
+    )
+    parser.add_argument(
+        "--base-url-env",
+        help=(
+            "environment variable containing the model-service URL; "
+            "openai_compatible only and mutually exclusive with --base-url"
+        ),
+    )
     parser.add_argument("--model-id", default="Qwen/Qwen3.6-27B")
     parser.add_argument(
         "--model-revision",
-        default="6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
+        default=None,
     )
     parser.add_argument("--vllm-version", default="0.24.0")
     parser.add_argument("--timeout-s", type=int, default=600)
@@ -569,17 +594,26 @@ def parse_args() -> argparse.Namespace:
         default=Path("/home/cz-sjj/ws/vllm/media"),
     )
     parser.add_argument("--api-key-env")
+    parser.add_argument(
+        "--backend-kind",
+        choices=("vllm", "openai_compatible"),
+        default="vllm",
+    )
     return parser.parse_args()
 
 
 async def _generate(
-    backend_config: VllmBackendConfig,
+    backend_config: VllmBackendConfig | OpenAICompatibleBackendConfig,
     request: GenerationRequest,
     image_uri: str,
 ) -> dict[str, object]:
-    async with VllmBackend(backend_config) as backend:
-        await backend.healthcheck()
-        response = await backend.generate_with_image(request, image_uri)
+    if isinstance(backend_config, VllmBackendConfig):
+        async with VllmBackend(backend_config) as backend:
+            await backend.healthcheck()
+            response = await backend.generate_with_image(request, image_uri)
+    else:
+        async with OpenAICompatibleBackend(backend_config) as backend:
+            response = await backend.generate_with_image(request, image_uri)
     return response.content
 
 
@@ -671,21 +705,53 @@ def run() -> int:
             print(f"contact_sheet={contact_sheet_path}")
             print(f"prompt={prompt_path}")
             return 0
-        backend_config = VllmBackendConfig(
-            kind="vllm",
-            base_url=args.base_url,
-            model_id=args.model_id,
-            model_revision=args.model_revision,
-            vllm_version=args.vllm_version,
-            timeout_s=args.timeout_s,
-            max_completion_tokens=512,
-            boundary_max_completion_tokens=512,
-            temperature=0,
-            seed=0,
-            enable_thinking=False,
-            media_staging_root=staging_root,
-            api_key_env=args.api_key_env,
-        )
+        backend_kind = getattr(args, "backend_kind", "vllm")
+        if backend_kind == "openai_compatible":
+            if not args.api_key_env:
+                raise ValueError(
+                    "--api-key-env is required for openai_compatible backend"
+                )
+            base_url = getattr(args, "base_url", None)
+            base_url_env = getattr(args, "base_url_env", None)
+            if (base_url is None) == (base_url_env is None):
+                raise ValueError(
+                    "exactly one of --base-url and --base-url-env is required "
+                    "for openai_compatible backend"
+                )
+            backend_config = OpenAICompatibleBackendConfig(
+                kind="openai_compatible",
+                base_url=base_url,
+                base_url_env=base_url_env,
+                model_id=args.model_id,
+                model_revision=args.model_revision or args.model_id,
+                timeout_s=args.timeout_s,
+                max_completion_tokens=512,
+                boundary_max_completion_tokens=512,
+                temperature=0,
+                media_staging_root=staging_root,
+                api_key_env=args.api_key_env,
+            )
+        else:
+            if getattr(args, "base_url_env", None) is not None:
+                raise ValueError(
+                    "--base-url-env is only supported by the "
+                    "openai_compatible backend"
+                )
+            backend_config = VllmBackendConfig(
+                kind="vllm",
+                base_url=args.base_url or DEFAULT_VLLM_BASE_URL,
+                model_id=args.model_id,
+                model_revision=args.model_revision or "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
+                vllm_version=args.vllm_version,
+                timeout_s=args.timeout_s,
+                max_completion_tokens=512,
+                boundary_max_completion_tokens=512,
+                temperature=0,
+                seed=0,
+                enable_thinking=False,
+                media_staging_root=staging_root,
+                api_key_env=args.api_key_env,
+            )
         coarse_content = asyncio.run(
             _generate(backend_config, request, materialized.uri)
         )
@@ -846,10 +912,31 @@ def run() -> int:
                     "frame_sheet_materializer_version": (
                         MULTI_VIEW_FRAME_SHEET_MATERIALIZER_VERSION
                     ),
-                    "vllm_adapter_version": VLLM_ADAPTER_VERSION,
+                    **(
+                        {"vllm_adapter_version": VLLM_ADAPTER_VERSION}
+                        if isinstance(backend_config, VllmBackendConfig)
+                        else {
+                            "backend_kind": "openai_compatible",
+                            "openai_compatible_adapter_version": (
+                                OPENAI_COMPATIBLE_ADAPTER_VERSION
+                            ),
+                            "backend_profile": backend_config.profile,
+                            "base_url": str(
+                                backend_config.effective_base_url
+                            ),
+                            "dashscope_prompt_version": DASHSCOPE_PROMPT_VERSION,
+                            "ordered_processor_version": ORDERED_PROCESSOR_VERSION,
+                            "ordered_runner_version": ORDERED_RUNNER_VERSION,
+                        }
+                    ),
                     "model_id": args.model_id,
-                    "model_revision": args.model_revision,
-                    "vllm_version": args.vllm_version,
+                    "model_revision": backend_config.model_revision
+                    or backend_config.model_id,
+                    **(
+                        {"vllm_version": args.vllm_version}
+                        if isinstance(backend_config, VllmBackendConfig)
+                        else {}
+                    ),
                     "sampling_fps": args.fps,
                     "refine_sampling_fps": args.refine_fps,
                     "refine_window_ms": args.refine_window_ms,

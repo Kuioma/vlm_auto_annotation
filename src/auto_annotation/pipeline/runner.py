@@ -7,6 +7,7 @@ from auto_annotation.artifacts.store import ArtifactStore
 from auto_annotation.config.loader import config_hash
 from auto_annotation.config.models import (
     MockBackendConfig,
+    OpenAICompatibleBackendConfig,
     RunConfig,
     VllmBackendConfig,
 )
@@ -18,10 +19,17 @@ from auto_annotation.domain.models import (
 from auto_annotation.exporters.jsonl import write_jsonl
 from auto_annotation.inference.base import InferenceBackend
 from auto_annotation.inference.mock import ScriptedMockBackend
+from auto_annotation.inference.openai_compatible import (
+    OPENAI_COMPATIBLE_ADAPTER_VERSION,
+    OPENAI_COMPATIBLE_PROFILE,
+    OpenAICompatibleBackend,
+)
 from auto_annotation.inference.vllm import VLLM_ADAPTER_VERSION, VllmBackend
 from auto_annotation.manifest import read_manifest
 from auto_annotation.media.materialize import (
+    FRAME_SHEET_MATERIALIZER_VERSION,
     MEDIA_MATERIALIZER_VERSION,
+    LocalFrameSheetMaterializer,
     LocalVideoMaterializer,
 )
 from auto_annotation.media.probe import probe_video
@@ -34,12 +42,13 @@ from auto_annotation.prompts.builders import (
     BOUNDARY_PROMPT_VERSION,
     COARSE_PROMPT_VERSION,
 )
+from auto_annotation.prompts.dashscope import DASHSCOPE_PROMPT_VERSION
 
 
 COARSE_STAGE_VERSION = "coarse-stage-v1"
 REFINE_STAGE_VERSION = "refine-stage-v1"
 FINALIZE_STAGE_VERSION = "finalize-stage-v2"
-RUNNER_STAGE_VERSION = "runner-stage-v2"
+RUNNER_STAGE_VERSION = "runner-stage-v3"
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -116,8 +125,13 @@ async def _run_items(
     store: ArtifactStore,
     run_id: str,
     digest: str,
+    manifest_sha256: str | None = None,
+    video_digests: dict[str, str] | None = None,
 ) -> list[AnnotationDocument]:
     results: list[AnnotationDocument] = []
+    defer_initial_artifacts = isinstance(
+        config.backend, OpenAICompatibleBackendConfig
+    )
     for item in items:
         info = probe_video(item.video_uri)
         chunks = build_chunks(info, max_chunk_ms=120_000, overlap_ms=8000)
@@ -129,14 +143,23 @@ async def _run_items(
             chunk,
             config.sampling.coarse_fps,
         )
-        store.write_json(
-            run_id,
-            item.video_id,
-            "coarse-sample-plan",
-            sample_plan,
-        )
-
+        if not defer_initial_artifacts:
+            store.write_json(
+                run_id,
+                item.video_id,
+                "coarse-sample-plan",
+                sample_plan,
+            )
         coarse = await run_coarse_stage(item, sample_plan, contract, backend)
+        if defer_initial_artifacts:
+            # DashScope runs do not create persistent artifacts until the first
+            # completion and all local coarse validation have succeeded.
+            store.write_json(
+                run_id,
+                item.video_id,
+                "coarse-sample-plan",
+                sample_plan,
+            )
         store.write_json(run_id, item.video_id, "coarse", coarse)
 
         refined = await run_boundary_stage(
@@ -166,10 +189,42 @@ async def _run_items(
                 prompt_versions={
                     "coarse": COARSE_PROMPT_VERSION,
                     "boundary": BOUNDARY_PROMPT_VERSION,
+                    **(
+                        {"dashscope": DASHSCOPE_PROMPT_VERSION}
+                        if isinstance(
+                            config.backend, OpenAICompatibleBackendConfig
+                        )
+                        else {}
+                    ),
                 },
                 model_id=backend.model_id,
                 model_revision=backend.model_revision,
                 config_hash=digest,
+                **(
+                    {
+                        "backend_kind": "openai_compatible",
+                        "backend_profile": OPENAI_COMPATIBLE_PROFILE,
+                        "base_url": str(config.backend.effective_base_url)
+                        if isinstance(
+                            config.backend, OpenAICompatibleBackendConfig
+                        )
+                        else None,
+                        "adapter_version": OPENAI_COMPATIBLE_ADAPTER_VERSION,
+                        "materializer_version": FRAME_SHEET_MATERIALIZER_VERSION,
+                        "stage_versions": {
+                            "coarse": COARSE_STAGE_VERSION,
+                            "refine": REFINE_STAGE_VERSION,
+                            "finalize": FINALIZE_STAGE_VERSION,
+                        },
+                        "runner_version": RUNNER_STAGE_VERSION,
+                        "manifest_sha256": manifest_sha256,
+                        "video_sha256": {
+                            item.video_id: (video_digests or {}).get(item.video_id, "")
+                        },
+                    }
+                    if isinstance(config.backend, OpenAICompatibleBackendConfig)
+                    else {}
+                ),
             ),
         )
         store.write_json(run_id, item.video_id, "final", document)
@@ -185,6 +240,8 @@ async def _execute_run(
     run_id: str,
     digest: str,
     mock_script: dict[str, list[dict[str, object]]] | None,
+    manifest_sha256: str | None = None,
+    video_digests: dict[str, str] | None = None,
 ) -> list[AnnotationDocument]:
     backend_config = config.backend
     if isinstance(backend_config, MockBackendConfig):
@@ -199,6 +256,8 @@ async def _execute_run(
             ArtifactStore(config.artifact_root),
             run_id,
             digest,
+            manifest_sha256,
+            video_digests,
         )
     if isinstance(backend_config, VllmBackendConfig):
         materializer = LocalVideoMaterializer(
@@ -218,6 +277,28 @@ async def _execute_run(
                 ArtifactStore(config.artifact_root),
                 run_id,
                 digest,
+                manifest_sha256,
+                video_digests,
+            )
+    if isinstance(backend_config, OpenAICompatibleBackendConfig):
+        materializer = LocalFrameSheetMaterializer(
+            backend_config.media_staging_root
+        )
+        materializer.validate()
+        async with OpenAICompatibleBackend(
+            backend_config,
+            materializer=materializer,
+        ) as backend:
+            return await _run_items(
+                config,
+                items,
+                contract,
+                backend,
+                ArtifactStore(config.artifact_root),
+                run_id,
+                digest,
+                manifest_sha256,
+                video_digests,
             )
     raise TypeError(f"unsupported backend config: {type(backend_config)!r}")
 
@@ -271,6 +352,17 @@ def run_annotation(config: RunConfig) -> list[AnnotationDocument]:
             "vllm_adapter_version": VLLM_ADAPTER_VERSION,
             "vllm_version": config.backend.vllm_version,
         }
+    elif isinstance(config.backend, OpenAICompatibleBackendConfig):
+        backend_identity = {
+            "backend_kind": "openai_compatible",
+            "backend_profile": OPENAI_COMPATIBLE_PROFILE,
+            "base_url": str(config.backend.effective_base_url),
+            "model_id": config.backend.model_id,
+            "model_revision": config.backend.effective_model_revision,
+            "openai_compatible_adapter_version": OPENAI_COMPATIBLE_ADAPTER_VERSION,
+            "dashscope_prompt_version": DASHSCOPE_PROMPT_VERSION,
+            "frame_sheet_materializer_version": FRAME_SHEET_MATERIALIZER_VERSION,
+        }
     else:
         raise TypeError(f"unsupported backend config: {type(config.backend)!r}")
     identity = {
@@ -285,9 +377,13 @@ def run_annotation(config: RunConfig) -> list[AnnotationDocument]:
         "runner_stage_version": RUNNER_STAGE_VERSION,
     }
     identity.update(backend_identity)
+    identity_manifest_sha256 = _sha256_bytes(manifest_bytes)
+    video_digests = {
+        item.video_id: _sha256_file(item.video_uri) for item in items
+    }
     identity.update(
         {
-            f"video_sha256:{item.video_id}": _sha256_file(item.video_uri)
+            f"video_sha256:{item.video_id}": video_digests[item.video_id]
             for item in items
         }
     )
@@ -304,6 +400,8 @@ def run_annotation(config: RunConfig) -> list[AnnotationDocument]:
             run_id,
             digest,
             mock_script,
+            identity_manifest_sha256,
+            video_digests,
         )
     )
     return results

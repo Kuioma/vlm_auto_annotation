@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 
 class DomainModel(BaseModel):
@@ -119,6 +119,41 @@ class Provenance(DomainModel):
     model_id: str
     model_revision: str
     config_hash: str
+    backend_kind: str | None = None
+    backend_profile: str | None = None
+    base_url: str | None = None
+    adapter_version: str | None = None
+    materializer_version: str | None = None
+    stage_versions: dict[str, str] | None = None
+    runner_version: str | None = None
+    manifest_sha256: str | None = None
+    video_sha256: dict[str, str] | None = None
+
+    @model_serializer(mode="plain")
+    def serialize(self) -> dict[str, Any]:
+        values: dict[str, Any] = {
+            "schema_version": self.schema_version,
+            "ontology_hash": self.ontology_hash,
+            "prompt_versions": self.prompt_versions,
+            "model_id": self.model_id,
+            "model_revision": self.model_revision,
+            "config_hash": self.config_hash,
+        }
+        optional = {
+            "backend_kind": self.backend_kind,
+            "backend_profile": self.backend_profile,
+            "base_url": self.base_url,
+            "adapter_version": self.adapter_version,
+            "materializer_version": self.materializer_version,
+            "stage_versions": self.stage_versions,
+            "runner_version": self.runner_version,
+            "manifest_sha256": self.manifest_sha256,
+            "video_sha256": self.video_sha256,
+        }
+        values.update(
+            {key: value for key, value in optional.items() if value is not None}
+        )
+        return values
 
 
 class FinalizedAnnotation(DomainModel):

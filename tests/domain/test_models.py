@@ -1,7 +1,14 @@
+import json
+
 import pytest
 from pydantic import ValidationError
 
-from auto_annotation.domain.models import FinalizedAnnotation, Quality, Segment
+from auto_annotation.domain.models import (
+    FinalizedAnnotation,
+    Provenance,
+    Quality,
+    Segment,
+)
 
 
 def segment(segment_id: str, start_ms: int, end_ms: int) -> Segment:
@@ -44,3 +51,26 @@ def test_final_annotation_rejects_overlap() -> None:
 def test_segment_rejects_empty_interval() -> None:
     with pytest.raises(ValidationError, match="end_ms"):
         segment("s1", 1000, 1000)
+
+
+def test_dashscope_provenance_contains_identity_without_secret_fields() -> None:
+    provenance = Provenance(
+        schema_version="schema-v1",
+        ontology_hash="sha256:ontology",
+        prompt_versions={"dashscope": "prompt-v1"},
+        model_id="qwen3-vl-plus",
+        model_revision="qwen3-vl-plus",
+        config_hash="sha256:config",
+        backend_kind="openai_compatible",
+        backend_profile="dashscope_qwen_vision",
+        base_url="https://workspace-id.example.test/v1",
+        adapter_version="adapter-v1",
+        materializer_version="materializer-v1",
+        runner_version="runner-v1",
+        manifest_sha256="sha256:manifest",
+        video_sha256={"video-1": "sha256:video"},
+    )
+    serialized = provenance.model_dump(mode="json")
+    assert serialized["backend_profile"] == "dashscope_qwen_vision"
+    assert "api_key" not in serialized
+    assert "synthetic-secret" not in json.dumps(serialized)

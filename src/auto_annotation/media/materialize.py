@@ -8,10 +8,11 @@ from typing import Callable
 
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 MEDIA_MATERIALIZER_VERSION = "local-video-materializer-v1"
-FRAME_SHEET_MATERIALIZER_VERSION = "local-frame-sheet-materializer-v1"
+FRAME_SHEET_MATERIALIZER_VERSION = "local-frame-sheet-materializer-v2"
 MULTI_VIEW_FRAME_SHEET_MATERIALIZER_VERSION = (
     "local-multi-view-frame-sheet-materializer-v2"
 )
+MAX_CONTACT_SHEET_POINTS = 40
 
 
 def _default_runner(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -175,18 +176,29 @@ class LocalFrameSheetMaterializer(LocalVideoMaterializer):
         source: Path,
         frame_timestamps_ms: tuple[int, ...],
         *,
+        label_timestamps_ms: tuple[int, ...] | None = None,
         columns: int = 5,
         cell_width: int = 320,
         cell_height: int = 180,
     ) -> MaterializedFrameSheet:
         if not frame_timestamps_ms:
             raise ValueError("frame sheet requires at least one timestamp")
+        if len(frame_timestamps_ms) > MAX_CONTACT_SHEET_POINTS:
+            raise ValueError(
+                "frame sheet has more than 40 time units; reduce FPS or "
+                "window size"
+            )
         if any(timestamp < 0 for timestamp in frame_timestamps_ms):
             raise ValueError("frame sheet timestamps must be non-negative")
         if tuple(sorted(set(frame_timestamps_ms))) != frame_timestamps_ms:
             raise ValueError(
                 "frame sheet timestamps must be unique and increasing"
             )
+        if label_timestamps_ms is not None and (
+            len(label_timestamps_ms) != len(frame_timestamps_ms)
+            or any(timestamp < 0 for timestamp in label_timestamps_ms)
+        ):
+            raise ValueError("frame sheet labels must match source timestamps")
         if columns <= 0 or cell_width <= 0 or cell_height <= 0:
             raise ValueError("frame sheet dimensions must be positive")
 
@@ -206,7 +218,12 @@ class LocalFrameSheetMaterializer(LocalVideoMaterializer):
         try:
             for index, timestamp_ms in enumerate(frame_timestamps_ms):
                 frame_path = workspace / f"frame-{index:03d}.jpg"
-                label = f"F{index:03d} {timestamp_ms}ms"
+                label_timestamp = (
+                    timestamp_ms
+                    if label_timestamps_ms is None
+                    else label_timestamps_ms[index]
+                )
+                label = f"F{index:03d} {label_timestamp}ms"
                 video_filter = (
                     f"scale={cell_width}:{cell_height}:"
                     "force_original_aspect_ratio=decrease,"
@@ -305,6 +322,11 @@ class LocalMultiViewFrameSheetMaterializer(LocalFrameSheetMaterializer):
             )
         if not frame_timestamps_ms:
             raise ValueError("frame sheet requires at least one timestamp")
+        if len(frame_timestamps_ms) > MAX_CONTACT_SHEET_POINTS:
+            raise ValueError(
+                "frame sheet has more than 40 time units; reduce FPS or "
+                "window size"
+            )
         if any(timestamp < 0 for timestamp in frame_timestamps_ms):
             raise ValueError("frame sheet timestamps must be non-negative")
         if tuple(sorted(set(frame_timestamps_ms))) != frame_timestamps_ms:

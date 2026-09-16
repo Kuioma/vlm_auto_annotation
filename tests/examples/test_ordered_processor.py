@@ -840,6 +840,265 @@ def test_run_records_active_action_selection_and_asymmetric_layout(
     }
 
 
+def test_ordered_openai_metadata_records_dashscope_behavior_versions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head = _write_camera_video(tmp_path, "observation.images.head_rgb")
+    _write_training_mask(tmp_path, {"right_action": False})
+    modality, episodes = _write_video_meta(tmp_path)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv(
+        "DASHSCOPE_BASE_URL",
+        "https://workspace-env.example.test/compatible-mode/v1",
+    )
+    monkeypatch.setattr(
+        processor,
+        "parse_args",
+        lambda: SimpleNamespace(
+            video=head,
+            left_wrist_video=None,
+            right_wrist_video=None,
+            output_dir=output_dir,
+            schema_path=CONFIG_ROOT / "schema.yaml",
+            ontology_path=CONFIG_ROOT / "ontology.yaml",
+            task_path=CONFIG_ROOT / "task.yaml",
+            fps=2.0,
+            refine_fps=4.0,
+            refine_window_ms=1000,
+            columns=3,
+            base_url=None,
+            base_url_env="DASHSCOPE_BASE_URL",
+            model_id="qwen3-vl-plus",
+            model_revision=None,
+            vllm_version="unused",
+            timeout_s=30,
+            prepare_only=False,
+            media_staging_root=staging,
+            api_key_env="DASHSCOPE_API_KEY",
+            backend_kind="openai_compatible",
+        ),
+    )
+    info = VideoInfo(
+        path=head.resolve(),
+        duration_ms=3000,
+        width=1280,
+        height=720,
+        nominal_fps=4.0,
+        frame_timestamps_ms=tuple(range(0, 3000, 250)),
+    )
+    monkeypatch.setattr(processor, "probe_synchronized_views", lambda views: info)
+
+    class FakeMaterializer:
+        def __init__(self, staging_root: Path) -> None:
+            self.staging_root = staging_root
+            self.count = 0
+
+        def materialize(self, views: tuple[FrameSheetView, ...], frame_timestamps_ms: tuple[int, ...], **kwargs: object) -> MaterializedFrameSheet:
+            workspace = self.staging_root / f"workspace-{self.count}"
+            self.count += 1
+            workspace.mkdir()
+            sheet = workspace / "sheet.jpg"
+            sheet.write_bytes(b"sheet")
+            return MaterializedFrameSheet(
+                path=sheet,
+                workspace=workspace,
+                frame_timestamps_ms=frame_timestamps_ms,
+                time_unit_width=480,
+                time_unit_height=270,
+            )
+
+    responses = iter(
+        (
+            {
+                "event_frame_indices": {"transfer": 2, "place": 4},
+                "evidence_frame_indices": [2, 4],
+            },
+            {
+                "event_id": "transfer",
+                "event_frame_index": 1,
+                "evidence_frame_indices": [1, 2],
+            },
+            {
+                "event_id": "place",
+                "event_frame_index": 3,
+                "evidence_frame_indices": [2, 3],
+            },
+        )
+    )
+
+    async def fake_generate(backend_config: object, request: object, image_uri: str) -> dict[str, object]:
+        assert backend_config.kind == "openai_compatible"
+        assert str(backend_config.effective_base_url).startswith(
+            "https://workspace-env."
+        )
+        return next(responses)
+
+    monkeypatch.setattr(processor, "LocalMultiViewFrameSheetMaterializer", FakeMaterializer)
+    monkeypatch.setattr(processor, "_generate", fake_generate)
+
+    assert processor.run() == 0
+    record = json.loads((output_dir / "output.jsonl").read_text(encoding="utf-8"))
+    experiment = record["experiment"]
+    assert experiment["backend_kind"] == "openai_compatible"
+    assert experiment["backend_profile"] == "dashscope_qwen_vision"
+    assert experiment["base_url"].startswith("https://workspace-env.")
+    assert experiment["dashscope_prompt_version"] == processor.DASHSCOPE_PROMPT_VERSION
+    assert experiment["ordered_processor_version"] == processor.ORDERED_PROCESSOR_VERSION
+    assert experiment["ordered_runner_version"] == processor.ORDERED_RUNNER_VERSION
+    assert "vllm_version" not in experiment
+
+
+def test_ordered_openai_prepare_only_does_not_read_key_or_call_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head = _write_camera_video(tmp_path, "observation.images.head_rgb")
+    _write_training_mask(tmp_path, {"right_action": False})
+    _write_video_meta(tmp_path)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    output_dir = tmp_path / "output"
+    monkeypatch.setattr(
+        processor,
+        "parse_args",
+        lambda: SimpleNamespace(
+            video=head,
+            left_wrist_video=None,
+            right_wrist_video=None,
+            output_dir=output_dir,
+            schema_path=CONFIG_ROOT / "schema.yaml",
+            ontology_path=CONFIG_ROOT / "ontology.yaml",
+            task_path=CONFIG_ROOT / "task.yaml",
+            fps=2.0,
+            refine_fps=4.0,
+            refine_window_ms=1000,
+            columns=3,
+            base_url=None,
+            base_url_env="MISSING_DASHSCOPE_BASE_URL",
+            model_id="qwen3-vl-plus",
+            model_revision=None,
+            vllm_version="unused",
+            timeout_s=30,
+            prepare_only=True,
+            media_staging_root=staging,
+            api_key_env=None,
+            backend_kind="openai_compatible",
+        ),
+    )
+    info = VideoInfo(
+        path=head.resolve(),
+        duration_ms=3000,
+        width=1280,
+        height=720,
+        nominal_fps=4.0,
+        frame_timestamps_ms=tuple(range(0, 3000, 250)),
+    )
+    monkeypatch.setattr(processor, "probe_synchronized_views", lambda views: info)
+
+    class FakeMaterializer:
+        def __init__(self, staging_root: Path) -> None:
+            self.staging_root = staging_root
+
+        def materialize(self, views: tuple[FrameSheetView, ...], frame_timestamps_ms: tuple[int, ...], **kwargs: object) -> MaterializedFrameSheet:
+            workspace = self.staging_root / "prepare-workspace"
+            workspace.mkdir()
+            sheet = workspace / "sheet.jpg"
+            sheet.write_bytes(b"sheet")
+            return MaterializedFrameSheet(
+                path=sheet,
+                workspace=workspace,
+                frame_timestamps_ms=frame_timestamps_ms,
+            )
+
+    async def fail_if_called(backend_config: object, request: object, image_uri: str) -> dict[str, object]:
+        raise AssertionError("prepare-only must not call a backend")
+
+    monkeypatch.setattr(processor, "LocalMultiViewFrameSheetMaterializer", FakeMaterializer)
+    monkeypatch.setattr(processor, "_generate", fail_if_called)
+
+    assert processor.run() == 0
+    video_id = "episode_000005_multiview"
+    assert (output_dir / f"{video_id}-contact-sheet.jpg").is_file()
+    assert (output_dir / f"{video_id}-prompt.txt").is_file()
+    assert not (output_dir / "output.jsonl").exists()
+
+
+def test_ordered_openai_failure_keeps_diagnostics_without_success_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head = _write_camera_video(tmp_path, "observation.images.head_rgb")
+    _write_training_mask(tmp_path, {"right_action": False})
+    _write_video_meta(tmp_path)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    output_dir = tmp_path / "output"
+    monkeypatch.setattr(
+        processor,
+        "parse_args",
+        lambda: SimpleNamespace(
+            video=head,
+            left_wrist_video=None,
+            right_wrist_video=None,
+            output_dir=output_dir,
+            schema_path=CONFIG_ROOT / "schema.yaml",
+            ontology_path=CONFIG_ROOT / "ontology.yaml",
+            task_path=CONFIG_ROOT / "task.yaml",
+            fps=2.0,
+            refine_fps=4.0,
+            refine_window_ms=1000,
+            columns=3,
+            base_url="https://workspace-id.example.test/compatible-mode/v1",
+            model_id="qwen3-vl-plus",
+            model_revision=None,
+            vllm_version="unused",
+            timeout_s=30,
+            prepare_only=False,
+            media_staging_root=staging,
+            api_key_env="DASHSCOPE_API_KEY",
+            backend_kind="openai_compatible",
+        ),
+    )
+    info = VideoInfo(
+        path=head.resolve(),
+        duration_ms=3000,
+        width=1280,
+        height=720,
+        nominal_fps=4.0,
+        frame_timestamps_ms=tuple(range(0, 3000, 250)),
+    )
+    monkeypatch.setattr(processor, "probe_synchronized_views", lambda views: info)
+
+    class FakeMaterializer:
+        def __init__(self, staging_root: Path) -> None:
+            self.staging_root = staging_root
+            self.count = 0
+
+        def materialize(self, views: tuple[FrameSheetView, ...], frame_timestamps_ms: tuple[int, ...], **kwargs: object) -> MaterializedFrameSheet:
+            workspace = self.staging_root / f"failure-workspace-{self.count}"
+            self.count += 1
+            workspace.mkdir()
+            sheet = workspace / "sheet.jpg"
+            sheet.write_bytes(b"sheet")
+            return MaterializedFrameSheet(path=sheet, workspace=workspace, frame_timestamps_ms=frame_timestamps_ms)
+
+    async def fail_backend(backend_config: object, request: object, image_uri: str) -> dict[str, object]:
+        raise RuntimeError("ordered synthetic completion failure")
+
+    monkeypatch.setattr(processor, "LocalMultiViewFrameSheetMaterializer", FakeMaterializer)
+    monkeypatch.setattr(processor, "_generate", fail_backend)
+
+    with pytest.raises(RuntimeError, match="ordered synthetic completion failure"):
+        processor.run()
+    video_id = "episode_000005_multiview"
+    assert (output_dir / f"{video_id}-contact-sheet.jpg").is_file()
+    assert (output_dir / f"{video_id}-prompt.txt").is_file()
+    assert not (output_dir / "output.jsonl").exists()
+
+
 def test_probe_synchronized_views_rejects_empty_views() -> None:
     with pytest.raises(ValueError, match="at least one view"):
         processor.probe_synchronized_views(())

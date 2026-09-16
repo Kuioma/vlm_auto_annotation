@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from auto_annotation.media.materialize import (
+    MAX_CONTACT_SHEET_POINTS,
     MULTI_VIEW_FRAME_SHEET_MATERIALIZER_VERSION,
     FrameSheetView,
     LocalFrameSheetMaterializer,
@@ -123,6 +124,56 @@ def test_frame_sheet_materializer_numbers_exact_timestamps(
     workspace = materialized.workspace
     materialized.cleanup()
     assert not workspace.exists()
+
+
+def test_frame_sheet_uses_stage_local_labels_without_changing_source_pts(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    calls: list[list[str]] = []
+
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        Path(command[-1]).write_bytes(b"image")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    materialized = LocalFrameSheetMaterializer(staging, runner).materialize(
+        source,
+        (500, 1000),
+        label_timestamps_ms=(0, 500),
+    )
+    try:
+        assert materialized.frame_timestamps_ms == (500, 1000)
+        assert "F000 0ms" in calls[0][calls[0].index("-vf") + 1]
+        assert "F001 500ms" in calls[1][calls[1].index("-vf") + 1]
+        assert calls[0][calls[0].index("-ss") + 1] == "0.500"
+    finally:
+        materialized.cleanup()
+
+
+def test_frame_sheet_rejects_41_points_before_workspace_or_ffmpeg(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    calls: list[list[str]] = []
+
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    with pytest.raises(ValueError, match="more than 40"):
+        LocalFrameSheetMaterializer(staging, runner).materialize(
+            source,
+            tuple(range(MAX_CONTACT_SHEET_POINTS + 1)),
+        )
+    assert calls == []
+    assert list(staging.iterdir()) == []
 
 
 def test_materialized_frame_sheet_layout_metadata_has_safe_defaults(

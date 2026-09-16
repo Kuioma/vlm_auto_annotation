@@ -7,6 +7,7 @@ import yaml
 
 from auto_annotation.config.models import (
     MockBackendConfig,
+    OpenAICompatibleBackendConfig,
     RunConfig,
     VllmBackendConfig,
 )
@@ -26,6 +27,14 @@ def load_run_config(path: Path) -> RunConfig:
             update={"fixture_path": _resolve(base, backend.fixture_path)}
         )
     elif isinstance(backend, VllmBackendConfig):
+        resolved_backend = backend.model_copy(
+            update={
+                "media_staging_root": _resolve(
+                    base, backend.media_staging_root
+                )
+            }
+        )
+    elif isinstance(backend, OpenAICompatibleBackendConfig):
         resolved_backend = backend.model_copy(
             update={
                 "media_staging_root": _resolve(

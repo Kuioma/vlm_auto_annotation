@@ -20,9 +20,29 @@ class Wa2SourceConfig(BaseModel):
     dataset_root: Path
     dataset_id: str | None = Field(default=None, min_length=1)
     episodes_path: Path = Path("meta/episodes.jsonl")
+    episode_indices: tuple[int, ...] | None = None
     media: dict[str, str] = Field(min_length=1)
     primary_media: str | None = Field(default=None, min_length=1)
     fingerprint_mode: Literal["stat", "sha256"] = "sha256"
+
+    @field_validator("episode_indices", mode="before")
+    @classmethod
+    def validate_episode_indices(
+        cls,
+        value: object,
+    ) -> tuple[int, ...] | None:
+        if value is None:
+            return None
+        if not isinstance(value, (list, tuple)) or not value:
+            raise ValueError("episode_indices must be a non-empty list")
+        if any(type(index) is not int or index < 0 for index in value):
+            raise ValueError(
+                "episode_indices must contain non-negative integers"
+            )
+        indices = tuple(cast(list[int] | tuple[int, ...], value))
+        if len(set(indices)) != len(indices):
+            raise ValueError("episode_indices must not contain duplicates")
+        return indices
 
     @field_validator("media")
     @classmethod
@@ -199,6 +219,18 @@ class Wa2Source:
                 raise ValueError(f"duplicate episode_index: {episode_index}")
             seen_indices.add(episode_index)
             parsed.append((episode_index, line_number, row))
+
+        if self.config.episode_indices is not None:
+            requested_indices = set(self.config.episode_indices)
+            missing_indices = sorted(requested_indices - seen_indices)
+            if missing_indices:
+                raise ValueError(
+                    "configured episode_indices are missing from episodes "
+                    f"metadata: {missing_indices}"
+                )
+            parsed = [
+                entry for entry in parsed if entry[0] in requested_indices
+            ]
 
         dataset_id = self.config.dataset_id or dataset_root.name
         primary_media = self.config.primary_media or next(iter(self.config.media))

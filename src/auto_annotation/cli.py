@@ -24,6 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="suppress per-item batch progress on stderr",
     )
+    evaluate_parser = subparsers.add_parser("evaluate")
+    evaluate_parser.add_argument("--config", required=True, type=Path)
     return parser
 
 
@@ -68,4 +70,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(summary.model_dump_json(indent=2))
         return 1 if summary.failed else 0
+    if args.command == "evaluate":
+        from auto_annotation.evaluation.config import load_evaluation_config
+        from auto_annotation.evaluation.runner import run_evaluation
+
+        try:
+            summary = run_evaluation(load_evaluation_config(args.config))
+        except (OSError, ValueError) as error:
+            print(f"evaluation failed: {error}", file=sys.stderr)
+            return 2
+        print(summary.model_dump_json(indent=2))
+        return 0
     raise ValueError(f"unsupported command: {args.command}")

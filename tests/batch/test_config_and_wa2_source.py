@@ -331,6 +331,60 @@ def test_wa2_source_plugin_resolves_dataset_root_from_batch_config_dir(
     ]
 
 
+def test_wa2_source_selects_configured_episode_indices(
+    tmp_path: Path,
+) -> None:
+    root = _wa2_dataset(tmp_path)
+
+    items = Wa2Source(
+        Wa2SourceConfig(
+            dataset_root=root,
+            episode_indices=(2,),
+            media={"HEAD_RGB": "observation.images.head_rgb"},
+        ),
+        config_dir=tmp_path,
+    ).discover()
+
+    assert [item.item_id for item in items] == ["episode_000002"]
+
+
+@pytest.mark.parametrize(
+    "episode_indices, message",
+    [
+        ([], "non-empty"),
+        ([1, 1], "duplicates"),
+        ([-1], "non-negative integers"),
+        ([True], "non-negative integers"),
+    ],
+)
+def test_wa2_source_rejects_invalid_episode_index_selection(
+    episode_indices: list[object],
+    message: str,
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        Wa2SourceConfig(
+            dataset_root="/tmp/dataset",
+            episode_indices=episode_indices,
+            media={"HEAD_RGB": "observation.images.head_rgb"},
+        )
+
+
+def test_wa2_source_rejects_missing_selected_episode(
+    tmp_path: Path,
+) -> None:
+    root = _wa2_dataset(tmp_path)
+
+    with pytest.raises(ValueError, match=r"missing.*\[3\]"):
+        Wa2Source(
+            Wa2SourceConfig(
+                dataset_root=root,
+                episode_indices=(1, 3),
+                media={"HEAD_RGB": "observation.images.head_rgb"},
+            ),
+            config_dir=tmp_path,
+        ).discover()
+
+
 def test_wa2_sha256_fingerprint_tracks_media_content(tmp_path: Path) -> None:
     root = _wa2_dataset(tmp_path)
     config = Wa2SourceConfig(

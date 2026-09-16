@@ -1,0 +1,150 @@
+version: 1
+
+source:
+  plugin: auto_annotation.batch.sources.wa2:PLUGIN
+  config:
+    dataset_root: /home/cz-sjj/ws/dataset/WA2_industrial_sorting_3cam_gripper_cam/0622_333_20260624_093035_converted_online_clean_20260624_194551
+    dataset_id: 0622_333_20260624_093035_converted_online_clean_20260624_194551
+    episodes_path: meta/episodes.jsonl
+    episode_indices:
+      - 26
+      - 35
+      - 43
+      - 49
+      - 62
+      - 74
+      - 76
+      - 80
+      - 96
+      - 111
+      - 115
+      - 127
+      - 131
+      - 143
+      - 144
+      - 145
+      - 151
+      - 153
+      - 155
+      - 175
+      - 181
+      - 190
+      - 198
+      - 204
+      - 207
+      - 210
+      - 211
+      - 213
+      - 214
+      - 221
+      - 222
+      - 234
+      - 237
+      - 253
+      - 258
+      - 268
+      - 280
+      - 281
+      - 285
+      - 291
+      - 293
+      - 298
+      - 299
+      - 301
+      - 302
+      - 308
+      - 312
+      - 318
+      - 326
+      - 328
+    media:
+      HEAD_RGB: observation.images.head_rgb
+      RIGHT_WRIST_RGB: observation.images.right_wrist_rgb
+    primary_media: HEAD_RGB
+    fingerprint_mode: sha256
+
+processor:
+  plugin: auto_annotation.batch.processors.command:PLUGIN
+  config:
+    semantic_version: pick-and-place-bolt-ordered-dashscope-qwen3-vl-plus-v1
+    cwd: ../..
+    argv:
+      - uv
+      - run
+      - auto-annotate-ordered
+      - --video
+      - "{media_HEAD_RGB}"
+      - --right-wrist-video
+      - "{media_RIGHT_WRIST_RGB}"
+      - --output-dir
+      - "{output_dir}"
+      - --schema-path
+      - examples/pick_and_place_bolt/schema.yaml
+      - --ontology-path
+      - examples/pick_and_place_bolt/ontology.yaml
+      - --task-path
+      - examples/pick_and_place_bolt/task.yaml
+      - --fps
+      - "2"
+      - --refine-fps
+      - "10"
+      - --refine-window-ms
+      - "2000"
+      - --columns
+      - "3"
+      - --backend-kind
+      - openai_compatible
+      - --base-url-env
+      - DASHSCOPE_BASE_URL
+      - --model-id
+      - qwen3-vl-plus
+      - --model-revision
+      - qwen3-vl-plus
+      - --api-key-env
+      - DASHSCOPE_API_KEY
+      - --timeout-s
+      - "180"
+      - --media-staging-root
+      - /tmp/auto_annotation_dashscope_media
+    timeout_s: 1200
+    retryable_exit_codes: [1]
+    result_format: single_jsonl
+    result_path: output.jsonl
+    identity_files:
+      - schema.yaml
+      - ontology.yaml
+      - task.yaml
+      - ../../pyproject.toml
+      - ../../uv.lock
+      - ../../src/auto_annotation/batch/processors/command.py
+      - ../../src/auto_annotation/config/models.py
+      - ../../src/auto_annotation/domain/models.py
+      - ../../src/auto_annotation/exporters/jsonl.py
+      - ../../src/auto_annotation/inference/base.py
+      - ../../src/auto_annotation/inference/openai_compatible.py
+      - ../../src/auto_annotation/media/materialize.py
+      - ../../src/auto_annotation/media/probe.py
+      - ../../src/auto_annotation/media/sampling.py
+      - ../../src/auto_annotation/ontology/models.py
+      - ../../src/auto_annotation/ontology/registry.py
+      - ../../src/auto_annotation/ordered_steps.py
+      - ../../src/auto_annotation/ordered_processor.py
+      - ../../src/auto_annotation/pipeline/frame_index.py
+      - ../../src/auto_annotation/prompts/dashscope.py
+      - ../../src/auto_annotation/prompts/frame_index.py
+      - ../../src/auto_annotation/task.py
+      - /home/cz-sjj/ws/dataset/WA2_industrial_sorting_3cam_gripper_cam/0622_333_20260624_093035_converted_online_clean_20260624_194551/meta/episodes.jsonl
+      - /home/cz-sjj/ws/dataset/WA2_industrial_sorting_3cam_gripper_cam/0622_333_20260624_093035_converted_online_clean_20260624_194551/meta/modality.json
+      - /home/cz-sjj/ws/dataset/WA2_industrial_sorting_3cam_gripper_cam/0622_333_20260624_093035_converted_online_clean_20260624_194551/meta/training_mask.json
+
+execution:
+  resume: true
+  retry_terminal_failures: false
+  max_attempts: 3
+  retry_backoff_s: 10
+  continue_on_error: true
+  concurrency: 3
+  start_index: 0
+
+output:
+  workspace: /home/cz-sjj/ws/dataset/WA2_industrial_sorting_3cam_gripper_cam/0622_333_20260624_093035_converted_online_clean_20260624_194551/meta/auto_annotation_pick_and_place_bolt_dashscope_qwen3_vl_plus_gold50

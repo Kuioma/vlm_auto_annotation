@@ -1,0 +1,22 @@
+schema_path: ../../tests/fixtures/schema/subtask-v1.yaml
+ontology_path: ../../tests/fixtures/ontology/kitchen-v1.yaml
+manifest_path: input.jsonl
+artifact_root: artifacts
+output_path: output.jsonl
+backend:
+  kind: openai_compatible
+  base_url_env: DASHSCOPE_BASE_URL
+  model_id: qwen3-vl-plus
+  media_staging_root: staging
+  api_key_env: DASHSCOPE_API_KEY
+  timeout_s: 180
+  max_completion_tokens: 4096
+  boundary_max_completion_tokens: 512
+  temperature: 0
+sampling:
+  coarse_fps: 2.0
+  refine_fps: 6.0
+  refine_window_ms: 4000
+timeline:
+  merge_gap_ms: 250
+  min_segment_ms: 300
