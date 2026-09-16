@@ -854,33 +854,28 @@ def test_ordered_openai_metadata_records_dashscope_behavior_versions(
         "DASHSCOPE_BASE_URL",
         "https://workspace-env.example.test/compatible-mode/v1",
     )
-    monkeypatch.setattr(
-        processor,
-        "parse_args",
-        lambda: SimpleNamespace(
-            video=head,
-            left_wrist_video=None,
-            right_wrist_video=None,
-            output_dir=output_dir,
-            schema_path=CONFIG_ROOT / "schema.yaml",
-            ontology_path=CONFIG_ROOT / "ontology.yaml",
-            task_path=CONFIG_ROOT / "task.yaml",
-            fps=2.0,
-            refine_fps=4.0,
-            refine_window_ms=1000,
-            columns=3,
-            base_url=None,
-            base_url_env="DASHSCOPE_BASE_URL",
-            model_id="qwen3-vl-plus",
-            model_revision=None,
-            vllm_version="unused",
-            timeout_s=30,
-            prepare_only=False,
-            media_staging_root=staging,
-            api_key_env="DASHSCOPE_API_KEY",
-            backend_kind="openai_compatible",
-        ),
-    )
+    config_path = tmp_path / "ordered.json.yaml"
+    config_path.write_text(json.dumps({
+        "video": str(head),
+        "output_dir": "output",
+        "schema_path": str(CONFIG_ROOT / "schema.yaml"),
+        "ontology_path": str(CONFIG_ROOT / "ontology.yaml"),
+        "task_path": str(CONFIG_ROOT / "task.yaml"),
+        "sampling": {
+            "coarse_fps": 2,
+            "refine_fps": 4,
+            "refine_window_ms": 1000,
+        },
+        "backend": {
+            "kind": "openai_compatible",
+            "base_url_env": "DASHSCOPE_BASE_URL",
+            "api_key_env": "DASHSCOPE_API_KEY",
+            "model_id": "qwen3-vl-plus",
+            "timeout_s": 30,
+            "media_staging_root": "staging",
+        },
+    }), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["auto-annotate-ordered", "--config", str(config_path)])
     info = VideoInfo(
         path=head.resolve(),
         duration_ms=3000,

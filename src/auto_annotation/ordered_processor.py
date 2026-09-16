@@ -14,6 +14,7 @@ from auto_annotation.config.models import (
     OpenAICompatibleBackendConfig,
     VllmBackendConfig,
 )
+from auto_annotation.config.ordered import load_ordered_defaults
 from auto_annotation.domain.models import ManifestItem, VideoInfo
 from auto_annotation.exporters.jsonl import write_jsonl
 from auto_annotation.inference.base import GenerationRequest
@@ -521,8 +522,9 @@ def probe_synchronized_views(
     return reference_info
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, help="ordered run YAML; explicit CLI options override it")
     parser.add_argument(
         "--video",
         type=Path,
@@ -599,7 +601,21 @@ def parse_args() -> argparse.Namespace:
         choices=("vllm", "openai_compatible"),
         default="vllm",
     )
-    return parser.parse_args()
+    # Read only the config location first; the full parser still validates all
+    # arguments and retains the existing required flags when no YAML is used.
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument("--config", type=Path)
+    preliminary, _ = config_parser.parse_known_args(argv)
+    if preliminary.config is not None:
+        try:
+            defaults = load_ordered_defaults(preliminary.config)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        parser.set_defaults(**defaults)
+        for action in parser._actions:
+            if action.dest in defaults:
+                action.required = False
+    return parser.parse_args(argv)
 
 
 async def _generate(

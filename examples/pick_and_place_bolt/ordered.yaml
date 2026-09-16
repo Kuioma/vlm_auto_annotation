@@ -1,0 +1,23 @@
+# Paths are relative to this YAML. Replace video paths with your WA2 episode.
+# The processor also reads the dataset's meta/{episodes,modality,training_mask}.json*.
+video: /path/to/dataset/videos/chunk-000/observation.images.head_rgb/episode_000000.mp4
+right_wrist_video: /path/to/dataset/videos/chunk-000/observation.images.right_wrist_rgb/episode_000000.mp4
+output_dir: ../../artifacts/ordered
+schema_path: schema.yaml
+ontology_path: ontology.yaml
+task_path: task.yaml
+
+backend:
+  kind: vllm
+  base_url: http://127.0.0.1:8000/v1
+  model_id: Qwen/Qwen3.6-27B
+  model_revision: 6a9e13bd6fc8f0983b9b99948120bc37f49c13e9
+  vllm_version: 0.24.0
+  media_staging_root: /tmp/auto_annotation_ordered_media
+  timeout_s: 600
+
+sampling:
+  coarse_fps: 2
+  refine_fps: 10
+  refine_window_ms: 2000
+columns: 3

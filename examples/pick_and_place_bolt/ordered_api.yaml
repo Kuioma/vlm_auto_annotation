@@ -1,0 +1,21 @@
+# Set video paths to your WA2 episode and export the two environment variables.
+video: /path/to/dataset/videos/chunk-000/observation.images.head_rgb/episode_000000.mp4
+right_wrist_video: /path/to/dataset/videos/chunk-000/observation.images.right_wrist_rgb/episode_000000.mp4
+output_dir: ../../artifacts/ordered_api
+schema_path: schema.yaml
+ontology_path: ontology.yaml
+task_path: task.yaml
+
+backend:
+  kind: openai_compatible
+  base_url_env: DASHSCOPE_BASE_URL
+  api_key_env: DASHSCOPE_API_KEY
+  model_id: qwen3-vl-plus
+  media_staging_root: /tmp/auto_annotation_ordered_media
+  timeout_s: 180
+
+sampling:
+  coarse_fps: 2
+  refine_fps: 10
+  refine_window_ms: 2000
+columns: 3
