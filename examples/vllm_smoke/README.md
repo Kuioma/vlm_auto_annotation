@@ -10,6 +10,8 @@ processor 从 `task.yaml` 读取任意长度的有序闭集动作。每个动作
 局部窗口细化每个边界。边界 ID 使用该边界后开始的 `step_id`，最终 `segments`
 始终按半开区间连续覆盖整条时间轴：
 `A1=[0,b1)`、`A2=[b1,b2)`、...、`An=[b(n-1),duration_ms)`。
+本批量配置显式传入 `--input-mode wa2`，保留数据集元数据和动作掩码选视角行为。单条普通视频默认使用 `direct` 模式，不要求这些元数据；详见根目录 [README](../../README.md)。
+
 WA2 的 `pick_up → transfer → place` 只是当前 `task.yaml` 的一个配置实例；粗边界、
 细边界及其位移会保留在输出中供审计。
 

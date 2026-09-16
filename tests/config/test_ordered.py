@@ -92,3 +92,14 @@ def test_malformed_yaml_reports_cli_error(tmp_path: Path) -> None:
 def test_cli_still_requires_inputs() -> None:
     with pytest.raises(SystemExit):
         parse_args([])
+
+
+def test_input_mode_yaml_and_override(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    assert parse_args(["--config", str(config)]).input_mode == "direct"
+    config = write_config(tmp_path, input_mode="wa2")
+    assert parse_args(["--config", str(config)]).input_mode == "wa2"
+    assert parse_args(["--config", str(config), "--input-mode", "direct"]).input_mode == "direct"
+    config = write_config(tmp_path, input_mode="auto")
+    with pytest.raises(SystemExit):
+        parse_args(["--config", str(config)])

@@ -1,7 +1,8 @@
-# Paths are relative to this YAML. Replace video paths with your WA2 episode.
-# The processor also reads the dataset's meta/{episodes,modality,training_mask}.json*.
-video: /path/to/dataset/videos/chunk-000/observation.images.head_rgb/episode_000000.mp4
-right_wrist_video: /path/to/dataset/videos/chunk-000/observation.images.right_wrist_rgb/episode_000000.mp4
+# Direct mode: provide ordinary video files; no dataset layout or meta required.
+input_mode: direct
+video: /path/to/head.mp4
+# Optional: omit when only using the main camera.
+# right_wrist_video: /path/to/wrist.mp4
 output_dir: ../../artifacts/ordered
 schema_path: schema.yaml
 ontology_path: ontology.yaml

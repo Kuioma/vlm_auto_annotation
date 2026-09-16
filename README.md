@@ -35,7 +35,7 @@ uv run auto-annotate-ordered --config examples/pick_and_place_bolt/ordered_api.y
 ```text
 加载运行配置和三个任务定义文件
               ↓
-读取视频及数据集元数据，选择并检查相机视角
+读取指定视频，检查相机视角与同步关系
               ↓
 全视频低帧率采样，制作带帧编号的接触图
               ↓
@@ -66,35 +66,44 @@ mkdir -p /tmp/auto_annotation_ordered_media
 
 最后一条命令创建媒体暂存目录，采样图会在这里临时生成。后续配置中的 `backend.media_staging_root` 必须指向一个已存在的目录。
 
-### 当前支持的数据布局
+### 单条视频：直接指定文件，不需要 meta
 
-当前有序处理器会从视频路径定位 WA2 数据集根目录，并读取该数据集的元数据。请选择现有数据集中的一条 episode；它需要类似下面的布局：
+默认使用 `input_mode: direct`。只需要一个普通视频文件，目录结构和文件名不限；无需 LeRobot 格式，也无需 `episodes.jsonl`、`modality.json` 或 `training_mask.json`。例如：
 
 ```text
-/path/to/dataset/
-├── meta/
-│   ├── episodes.jsonl
-│   ├── modality.json
-│   └── training_mask.json
-└── videos/
-    └── chunk-000/
-        ├── observation.images.head_rgb/
-        │   └── episode_000000.mp4
-        └── observation.images.right_wrist_rgb/
-            └── episode_000000.mp4
+/data/demo/
+├── head.mp4
+└── wrist.mp4   # 可选
 ```
 
-| 数据 | 在流程中的作用 |
-| --- | --- |
-| 头部视频 `video` | 必填的主视角；必须使用 `videos/chunk-*/<video-key>/<episode>.mp4` 路径布局 |
-| `meta/episodes.jsonl` | 匹配这条头部视频所属的 episode，并找到同一 episode 的其他视角视频 |
-| `meta/modality.json` | 将头部、左腕、右腕等逻辑视角映射到数据集的实际视频字段 |
-| `meta/training_mask.json` | 根据启用的 `left_*`、`right_*` 动作决定是否使用对应腕部视角 |
-| 左右腕视频 | 与头部视频共同提供视觉证据；选中的多视角视频需要通过时间同步检查 |
+运行配置中写：
 
-程序支持一至三个视角。通常可以让它从元数据自动寻找腕部视频，也可以用 `left_wrist_video`、`right_wrist_video` 显式指定。显式路径不能启用被动作掩码禁用的视角：例如数据集没有启用右侧动作，就应删除示例中的 `right_wrist_video`，否则会报错。
+```yaml
+input_mode: direct
+video: /data/demo/head.mp4
+# 有同步腕部视频时再填写；不填写就是单视角
+# right_wrist_video: /data/demo/wrist.mp4
+# left_wrist_video: /data/demo/left.mp4
+```
 
-**当前不能只把一个任意 MP4 放进目录就运行。** 上述三个元数据文件需要存在，且视频路径和映射必须与其一致。当前也只接受最多 120 秒的单个视频 chunk；接触图采样数量还有额外限制，后面会解释如何调整采样率。
+`video` 是主视角文件，不能填目录。`left_wrist_video`、`right_wrist_video` 是可选的额外视角，不会自动扫描目录寻找视频。指定多个视角时，视频必须是不同文件，并且通过时长、帧率和帧 PTS 同步检查。
+
+直接模式完全不读取元数据，所以没有 `meta`、`meta` 为空或包含无效文件都不会影响单条运行。即使视频位于 WA2 数据集目录内，默认也只使用你显式指定的视角。
+
+### 可选：保留 WA2 数据集自动选视角
+
+如果希望根据现有数据集元数据自动选取腕部视角，明确设置：
+
+```yaml
+input_mode: wa2
+video: /path/to/dataset/videos/chunk-000/observation.images.head_rgb/episode_000000.mp4
+```
+
+也可以使用命令行 `--input-mode wa2`。只有这个模式要求 WA2 目录布局和完整的 `meta/episodes.jsonl`、`meta/modality.json`、`meta/training_mask.json`：它们分别用于匹配 episode、映射相机字段以及根据启用的左右侧动作选择视角。元数据缺失、为空或无效会明确报错，不会悄悄改为直接模式。
+
+仓库中的 WA2 批量配置已显式设置此模式。腕部路径仍可手动覆盖，但不能指定被训练动作掩码禁用的侧。单条视频验证使用默认直接模式即可，不需要创建这些文件。
+
+当前有序入口只接受最多 120 秒的单个视频 chunk；接触图采样数量还有额外限制，后面会解释如何调整采样率。
 
 ## 3. 准备四个 YAML：一个运行配置，三个任务定义
 
@@ -316,11 +325,12 @@ Task.step_id         ∈ Ontology.vocabularies.atomic_actions 的 ID
 
 ### 4.1 使用 API：ordered_api.yaml
 
-[完整 API 示例](examples/pick_and_place_bolt/ordered_api.yaml)如下。将两个 `/path/to/dataset/...` 改为你实际的同一 episode 视频路径；如果让元数据自动寻找腕部视频，可以省略 `right_wrist_video`。
+[完整 API 示例](examples/pick_and_place_bolt/ordered_api.yaml)如下。将 `/path/to/head.mp4` 改为实际主视频路径。如果只有一个视频，保留这一项即可；有同步腕部视频时，再填写对应路径。
 
 ```yaml
-video: /path/to/dataset/videos/chunk-000/observation.images.head_rgb/episode_000000.mp4
-right_wrist_video: /path/to/dataset/videos/chunk-000/observation.images.right_wrist_rgb/episode_000000.mp4
+input_mode: direct
+video: /path/to/head.mp4
+# right_wrist_video: /path/to/wrist.mp4  # 可选
 output_dir: ../../artifacts/ordered_api
 
 schema_path: schema.yaml
@@ -411,7 +421,7 @@ uv run auto-annotate-ordered \
   --prepare-only
 ```
 
-准备模式会读取视频、元数据和三个任务定义文件，生成全局接触图及提示词，并打印所选视角、帧数和文件位置。此时不会调用模型，也不会读取端点或 API key 环境变量。
+准备模式会读取指定视频和三个任务定义文件（只有 `wa2` 模式读取数据集元数据），生成全局接触图及提示词，并打印所选视角、帧数和文件位置。此时不会调用模型，也不会读取端点或 API key 环境变量。
 
 打开生成的图片，确认视频确实是目标 episode、视角正确、能看到关键动作；再打开提示词，确认步骤顺序、动作定义和边界规则符合要求。准备模式只生成全局图：局部窗口必须等模型给出粗边界以后才能确定，因此此时没有精修图和最终 `output.jsonl`。准备模式成功也不表示模型服务连接已经验证。
 
@@ -468,7 +478,7 @@ uv run python -m json.tool artifacts/ordered_api/output.jsonl
 | `coarse_segments` | 精修之前的粗时间段，用于比较 |
 | `events`、`coarse_events` | 精修后和精修前的边界事件 |
 | `event_refinements` | 每个边界的粗细时间、位移、局部窗口和模型响应 |
-| `experiment` | 任务文件哈希、模型信息、采样参数、选用视角等运行记录 |
+| `experiment` | 任务文件哈希、模型信息、采样参数、选用视角等运行记录；`view_selection.input_mode` 标识直接或 WA2 模式，直接模式仅记录实际视频信息，不伪造元数据路径 |
 
 最终 `segments` 中每段有 `start_ms`、`end_ms`、`values` 和 `sentence` 等字段。例如搬运段可能包含以下内容；这是仅保留关键字段的说明示例：
 
@@ -492,8 +502,8 @@ uv run python -m json.tool artifacts/ordered_api/output.jsonl
 | 现象 | 优先检查 |
 | --- | --- |
 | 找不到 `schema.yaml`、`ontology.yaml`、`task.yaml` | 从运行配置所在目录解析路径；移动配置时是否同步修改引用 |
-| 提示缺少训练掩码、modality 或 episode 元数据 | 输入是否来自完整的 WA2 数据集，是否保留正确的 `videos/chunk-*` 布局 |
-| 指定腕部视角后提示该侧未启用 | `training_mask.json` 是否启用该侧动作；未启用时删除对应显式腕部路径 |
+| 提示缺少训练掩码、modality 或 episode 元数据 | 当前选择了 `wa2` 模式；单条普通视频改用 `input_mode: direct`，数据集自动选视角则补齐真实元数据 |
+| WA2 模式指定腕部视角后提示该侧未启用 | `training_mask.json` 是否启用该侧动作；直接模式按显式视频路径选择视角，不受掩码控制 |
 | Schema/Ontology ID 不匹配、动作或值校验失败 | Task 引用的 ID、`step_id`、`values.atomic_action` 与词表是否一致 |
 | 暂存路径不存在 | 先创建 `backend.media_staging_root` 指向的目录 |
 | 接触图超过 40 个时间单元 | 降低粗/细采样率或缩短精修窗口，再用准备模式检查 |
@@ -506,7 +516,7 @@ uv run python -m json.tool artifacts/ordered_api/output.jsonl
 
 ## 8. 单条确认后，批量运行同一有序任务
 
-批量配置分为 `source`、`processor`、`execution` 和 `output` 四部分。内置 WA2 source 读取 episode 元数据，command processor 为每个 episode 调用 `auto-annotate-ordered`，执行上面的有序动作分段流程。仓库现有 batch 示例通过 `argv` 传入参数；单条运行配置 `ordered.yaml` 与批量配置 `batch.yaml` 是两种不同格式。
+批量配置分为 `source`、`processor`、`execution` 和 `output` 四部分。内置 WA2 source 读取 episode 元数据，command processor 为每个 episode 调用 `auto-annotate-ordered --input-mode wa2`，执行上面的有序动作分段流程。仓库现有 batch 示例通过 `argv` 传入参数；单条运行配置 `ordered.yaml` 与批量配置 `batch.yaml` 是两种不同格式。
 
 仓库示例含开发环境的数据集绝对路径、模型服务地址、媒体暂存目录和输出 workspace。运行前请修改这些值，以及 `identity_files` 中的数据文件路径。
 

@@ -19,6 +19,74 @@ from auto_annotation.media.materialize import (
 from auto_annotation import ordered_processor as processor
 
 
+@pytest.mark.parametrize("wrist_count", [0, 1, 2])
+def test_direct_views_use_only_supplied_files(tmp_path: Path, wrist_count: int) -> None:
+    head, left, right = [tmp_path / name for name in ("head.mp4", "left.mp4", "right.mp4")]
+    for path in (head, left, right):
+        path.write_bytes(path.name.encode())
+    selection = processor.resolve_direct_camera_views(
+        head,
+        left_wrist_video=left if wrist_count == 2 else None,
+        right_wrist_video=right if wrist_count else None,
+    )
+    assert [view.label for view in selection.views] == (
+        ["HEAD_RGB", "LEFT_WRIST_RGB", "RIGHT_WRIST_RGB"] if wrist_count == 2
+        else ["HEAD_RGB", "RIGHT_WRIST_RGB"] if wrist_count == 1 else ["HEAD_RGB"]
+    )
+    assert selection.views[0].is_primary
+    assert all(not view.is_primary for view in selection.views[1:])
+    before = dict(selection.video_sha256)
+    head.write_bytes(b"changed content")
+    assert dict(processor.resolve_direct_camera_views(head).video_sha256)["HEAD_RGB"] != before["HEAD_RGB"]
+
+
+def test_direct_views_reject_missing_directory_and_duplicate_files(tmp_path: Path) -> None:
+    head = tmp_path / "head.mp4"
+    with pytest.raises(ValueError, match="does not exist"):
+        processor.resolve_direct_camera_views(head)
+    with pytest.raises(ValueError, match="not a file"):
+        processor.resolve_direct_camera_views(tmp_path)
+    head.write_bytes(b"video")
+    with pytest.raises(ValueError, match="does not exist"):
+        processor.resolve_direct_camera_views(head, right_wrist_video=tmp_path / "missing.mp4")
+    alias = tmp_path / "alias.mp4"
+    alias.symlink_to(head)
+    with pytest.raises(ValueError, match="distinct"):
+        processor.resolve_direct_camera_views(head, right_wrist_video=alias)
+
+
+def test_direct_prepare_only_on_real_video_without_meta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import shutil
+    import subprocess
+
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        pytest.skip("ffmpeg and ffprobe required")
+    head = tmp_path / "standalone.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+        "color=c=black:s=320x240:d=2:r=10", "-pix_fmt", "yuv420p", str(head),
+    ], check=True)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    config = tmp_path / "ordered.yaml"
+    config.write_text(json.dumps({
+        "video": "standalone.mp4", "output_dir": "output",
+        "schema_path": str(CONFIG_ROOT / "schema.yaml"),
+        "ontology_path": str(CONFIG_ROOT / "ontology.yaml"),
+        "task_path": str(CONFIG_ROOT / "task.yaml"),
+        "backend": {"kind": "openai_compatible", "media_staging_root": "staging"},
+    }))
+    monkeypatch.setattr(sys, "argv", ["auto-annotate-ordered", "--config", str(config), "--prepare-only"])
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("direct preparation must not read metadata or call model")
+    monkeypatch.setattr(processor, "resolve_camera_views", forbidden)
+    monkeypatch.setattr(processor, "_generate", forbidden)
+    assert processor.run() == 0
+    assert (tmp_path / "output/standalone_multiview-contact-sheet.jpg").is_file()
+    assert (tmp_path / "output/standalone_multiview-prompt.txt").is_file()
+    assert not (tmp_path / "output/output.jsonl").exists()
+
+
 DEFAULT_VIDEO_ORIGINAL_KEYS = {
     "head_rgb": "observation.images.head_rgb",
     "left_wrist_rgb": "observation.images.left_wrist_rgb",
@@ -502,6 +570,7 @@ def test_run_records_active_action_selection_and_asymmetric_layout(
         processor,
         "parse_args",
         lambda: SimpleNamespace(
+            input_mode="wa2",
             video=head,
             left_wrist_video=None,
             right_wrist_video=None,
@@ -795,6 +864,7 @@ def test_run_records_active_action_selection_and_asymmetric_layout(
     assert experiment["view_order"] == ["HEAD_RGB", "RIGHT_WRIST_RGB"]
     assert experiment["view_selection"] == {
         "version": processor.WA2_VIEW_SELECTION_VERSION,
+        "input_mode": "wa2",
         "training_mask_path": str(mask),
         "training_mask_sha256": hashlib.sha256(mask.read_bytes()).hexdigest(),
         "modality_path": str(modality),
@@ -840,13 +910,18 @@ def test_run_records_active_action_selection_and_asymmetric_layout(
     }
 
 
+@pytest.mark.parametrize("empty_meta", [False, True])
 def test_ordered_openai_metadata_records_dashscope_behavior_versions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    empty_meta: bool,
 ) -> None:
-    head = _write_camera_video(tmp_path, "observation.images.head_rgb")
-    _write_training_mask(tmp_path, {"right_action": False})
-    modality, episodes = _write_video_meta(tmp_path)
+    head = tmp_path / "head.mp4"
+    head.write_bytes(b"video")
+    if empty_meta:
+        (tmp_path / "meta").mkdir()
+        for name in ("training_mask.json", "modality.json", "episodes.jsonl"):
+            (tmp_path / "meta" / name).touch()
     staging = tmp_path / "staging"
     staging.mkdir()
     output_dir = tmp_path / "output"
@@ -944,6 +1019,15 @@ def test_ordered_openai_metadata_records_dashscope_behavior_versions(
     assert experiment["ordered_processor_version"] == processor.ORDERED_PROCESSOR_VERSION
     assert experiment["ordered_runner_version"] == processor.ORDERED_RUNNER_VERSION
     assert "vllm_version" not in experiment
+    assert experiment["view_selection"] == {
+        "version": processor.DIRECT_VIEW_SELECTION_VERSION,
+        "input_mode": "direct",
+        "primary_view": "HEAD_RGB",
+        "views": ["HEAD_RGB"],
+        "video_sha256": {"HEAD_RGB": hashlib.sha256(b"video").hexdigest()},
+    }
+    assert record["segments"][0]["start_ms"] == 0
+    assert record["segments"][-1]["end_ms"] == 3000
 
 
 def test_ordered_openai_prepare_only_does_not_read_key_or_call_backend(
@@ -960,6 +1044,7 @@ def test_ordered_openai_prepare_only_does_not_read_key_or_call_backend(
         processor,
         "parse_args",
         lambda: SimpleNamespace(
+            input_mode="wa2",
             video=head,
             left_wrist_video=None,
             right_wrist_video=None,
@@ -1035,6 +1120,7 @@ def test_ordered_openai_failure_keeps_diagnostics_without_success_output(
         processor,
         "parse_args",
         lambda: SimpleNamespace(
+            input_mode="wa2",
             video=head,
             left_wrist_video=None,
             right_wrist_video=None,

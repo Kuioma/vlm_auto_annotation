@@ -36,6 +36,7 @@ class OrderedBackendConfig(ConfigModel):
 
 
 class OrderedRunConfig(ConfigModel):
+    input_mode: Literal["direct", "wa2"] = "direct"
     video: Path
     left_wrist_video: Path | None = None
     right_wrist_video: Path | None = None

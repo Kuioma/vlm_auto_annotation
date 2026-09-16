@@ -1,6 +1,8 @@
-# Set video paths to your WA2 episode and export the two environment variables.
-video: /path/to/dataset/videos/chunk-000/observation.images.head_rgb/episode_000000.mp4
-right_wrist_video: /path/to/dataset/videos/chunk-000/observation.images.right_wrist_rgb/episode_000000.mp4
+# Direct mode: provide ordinary video files; no dataset layout or meta required.
+input_mode: direct
+video: /path/to/head.mp4
+# Optional: omit when only using the main camera.
+# right_wrist_video: /path/to/wrist.mp4
 output_dir: ../../artifacts/ordered_api
 schema_path: schema.yaml
 ontology_path: ontology.yaml

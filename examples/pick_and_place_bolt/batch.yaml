@@ -21,6 +21,8 @@ processor:
       - uv
       - run
       - auto-annotate-ordered
+      - --input-mode
+      - wa2
       - --video
       - "{media_HEAD_RGB}"
       - --right-wrist-video
@@ -65,6 +67,7 @@ processor:
       - ../../uv.lock
       - ../../src/auto_annotation/batch/processors/command.py
       - ../../src/auto_annotation/config/models.py
+      - ../../src/auto_annotation/config/ordered.py
       - ../../src/auto_annotation/domain/models.py
       - ../../src/auto_annotation/exporters/jsonl.py
       - ../../src/auto_annotation/inference/base.py

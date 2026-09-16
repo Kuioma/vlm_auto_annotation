@@ -61,8 +61,9 @@ AUXILIARY_VIEW_HEIGHT = 135
 WA2_VIEW_SELECTION_VERSION = "wa2-active-action-view-selection-v2"
 TRAINING_MASK_VERSION = 1
 MAX_FRAME_SHEET_POINTS = MAX_CONTACT_SHEET_POINTS
-ORDERED_PROCESSOR_VERSION = "ordered-processor-v4"
-ORDERED_RUNNER_VERSION = "ordered-runner-v2"
+ORDERED_PROCESSOR_VERSION = "ordered-processor-v5"
+ORDERED_RUNNER_VERSION = "ordered-runner-v3"
+DIRECT_VIEW_SELECTION_VERSION = "direct-view-selection-v1"
 DEFAULT_VLLM_BASE_URL = "http://127.0.0.1:8000/v1"
 
 
@@ -78,6 +79,71 @@ class CameraViewSelection:
     episodes_sha256: str
     episode_index: int
     video_sha256: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class DirectCameraViewSelection:
+    views: tuple[FrameSheetView, ...]
+    video_sha256: tuple[tuple[str, str], ...]
+
+
+def resolve_direct_camera_views(
+    head_video: Path,
+    *,
+    left_wrist_video: Path | None = None,
+    right_wrist_video: Path | None = None,
+) -> DirectCameraViewSelection:
+    """Use only explicitly supplied files, without inspecting dataset metadata."""
+    views = []
+    for label, path in (
+        ("HEAD_RGB", head_video),
+        ("LEFT_WRIST_RGB", left_wrist_video),
+        ("RIGHT_WRIST_RGB", right_wrist_video),
+    ):
+        if path is None:
+            continue
+        try:
+            source = path.expanduser().resolve(strict=True)
+        except FileNotFoundError as exc:
+            raise ValueError(f"{label} video does not exist: {path}") from exc
+        if not source.is_file():
+            raise ValueError(f"{label} video is not a file: {source}")
+        views.append(FrameSheetView(
+            label=label, source=source, is_primary=label == "HEAD_RGB",
+        ))
+    sources = [view.source for view in views]
+    if len(set(sources)) != len(sources):
+        raise ValueError("camera view videos must be distinct")
+    return DirectCameraViewSelection(
+        views=tuple(views),
+        video_sha256=tuple((view.label, _sha256_file(view.source)) for view in views),
+    )
+
+
+def view_selection_provenance(
+    selection: CameraViewSelection | DirectCameraViewSelection,
+) -> dict[str, Any]:
+    result = {
+        "version": DIRECT_VIEW_SELECTION_VERSION,
+        "input_mode": "direct",
+        "primary_view": "HEAD_RGB",
+        "views": [view.label for view in selection.views],
+        "video_sha256": dict(selection.video_sha256),
+    }
+    if isinstance(selection, CameraViewSelection):
+        result.update({
+            "version": WA2_VIEW_SELECTION_VERSION,
+            "input_mode": "wa2",
+            "training_mask_path": str(selection.training_mask_path),
+            "training_mask_sha256": selection.training_mask_sha256,
+            "modality_path": str(selection.modality_path),
+            "modality_sha256": selection.modality_sha256,
+            "episodes_path": str(selection.episodes_path),
+            "episodes_sha256": selection.episodes_sha256,
+            "episode_index": selection.episode_index,
+            "active_action_keys": selection.active_action_keys,
+        })
+    return result
 
 
 def _validate_frame_sheet_size(
@@ -526,12 +592,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, help="ordered run YAML; explicit CLI options override it")
     parser.add_argument(
+        "--input-mode", choices=("direct", "wa2"), default="direct",
+        help="direct: explicit video files; wa2: select views from dataset metadata",
+    )
+    parser.add_argument(
         "--video",
         type=Path,
         required=True,
         help=(
-            "head_rgb video; active left/right actions in the dataset training "
-            "mask select wrist videos from modality and episode metadata"
+            "primary video file; direct mode does not require dataset metadata"
         ),
     )
     parser.add_argument("--left-wrist-video", type=Path)
@@ -641,7 +710,11 @@ def run() -> int:
         raise ValueError("refine_fps must be greater than the global fps")
     if args.refine_window_ms <= 0:
         raise ValueError("refine_window_ms must be positive")
-    view_selection = resolve_camera_views(
+    resolver = (
+        resolve_camera_views if args.input_mode == "wa2"
+        else resolve_direct_camera_views
+    )
+    view_selection = resolver(
         args.video,
         left_wrist_video=args.left_wrist_video,
         right_wrist_video=args.right_wrist_video,
@@ -677,7 +750,7 @@ def run() -> int:
     item = ManifestItem(
         video_id=video_id,
         video_uri=head_video,
-        dataset_id="wa2-frame-index-multiview-smoke",
+        dataset_id=("wa2-frame-index-multiview-smoke" if args.input_mode == "wa2" else "direct-video"),
         schema_version=contract.schema.schema_id,
         ontology_id=contract.ontology.ontology_id,
     )
@@ -941,10 +1014,10 @@ def run() -> int:
                                 backend_config.effective_base_url
                             ),
                             "dashscope_prompt_version": DASHSCOPE_PROMPT_VERSION,
-                            "ordered_processor_version": ORDERED_PROCESSOR_VERSION,
-                            "ordered_runner_version": ORDERED_RUNNER_VERSION,
                         }
                     ),
+                    "ordered_processor_version": ORDERED_PROCESSOR_VERSION,
+                    "ordered_runner_version": ORDERED_RUNNER_VERSION,
                     "model_id": args.model_id,
                     "model_revision": backend_config.model_revision
                     or backend_config.model_id,
@@ -956,26 +1029,7 @@ def run() -> int:
                     "sampling_fps": args.fps,
                     "refine_sampling_fps": args.refine_fps,
                     "refine_window_ms": args.refine_window_ms,
-                    "view_selection": {
-                        "version": WA2_VIEW_SELECTION_VERSION,
-                        "training_mask_path": str(
-                            view_selection.training_mask_path
-                        ),
-                        "training_mask_sha256": (
-                            view_selection.training_mask_sha256
-                        ),
-                        "modality_path": str(view_selection.modality_path),
-                        "modality_sha256": view_selection.modality_sha256,
-                        "episodes_path": str(view_selection.episodes_path),
-                        "episodes_sha256": view_selection.episodes_sha256,
-                        "episode_index": view_selection.episode_index,
-                        "active_action_keys": (
-                            view_selection.active_action_keys
-                        ),
-                        "primary_view": "HEAD_RGB",
-                        "views": view_labels,
-                        "video_sha256": dict(view_selection.video_sha256),
-                    },
+                    "view_selection": view_selection_provenance(view_selection),
                     "view_order": view_labels,
                     "view_videos": {
                         view.label: str(view.source) for view in views
